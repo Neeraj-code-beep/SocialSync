@@ -16,7 +16,7 @@ async function generateCaption(base64ImageFile) {
   ];
 
   const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash-lite',
+    model: 'gemini-flash-latest',
     contents: contents,
     config: {
       systemInstruction: `You are an expert in generating captions for images.

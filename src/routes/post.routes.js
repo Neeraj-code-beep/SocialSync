@@ -14,4 +14,11 @@ router.post(
   createPostController,
 );
 
+router.post(
+  '/generate',
+  authMiddleware,
+  upload.single('image'),
+  createPostController,
+);
+
 module.exports = router;

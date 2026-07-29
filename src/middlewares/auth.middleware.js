@@ -2,7 +2,7 @@ const userModel = require('../models/user.models');
 const jwt = require('jsonwebtoken');
 
 async function authMiddleware(req, res, next) {
-  const token = req.cookies.token;
+  const token = req.cookies?.token || (req.headers.authorization && req.headers.authorization.startsWith('Bearer ') ? req.headers.authorization.split(' ')[1] : null);
 
   if (!token) {
     return res.status(401).json({
@@ -11,7 +11,7 @@ async function authMiddleware(req, res, next) {
   }
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret');
 
     console.log('Decoded Token:', decoded);
 
