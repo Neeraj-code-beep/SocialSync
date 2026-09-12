@@ -1,24 +1,28 @@
 const express = require('express');
 const router = express.Router();
 const authMiddleware = require('../middlewares/auth.middleware');
-const { createPostController } = require('../controllers/post.controller');
-const multer = require('multer');
+const { createPostController, getPostsController } = require('../controllers/post.controller');
+const upload = require('../middlewares/upload.middleware');
+const { aiLimiter } = require('../middlewares/rateLimiter.middleware');
 
-const upload = multer({ storage: multer.memoryStorage() });
+/* GET /api/posts [protected] - Retrieve user post history with pagination */
+router.get('/', authMiddleware, getPostsController);
 
-/* POST /api/post [protected] {image-file}*/
+/* POST /api/posts/post [protected] {image-file}*/
 router.post(
   '/post',
   authMiddleware,
+  aiLimiter,
   upload.single('image'),
-  createPostController,
+  createPostController
 );
 
 router.post(
   '/generate',
   authMiddleware,
+  aiLimiter,
   upload.single('image'),
-  createPostController,
+  createPostController
 );
 
 module.exports = router;

@@ -1,19 +1,38 @@
 const ImageKit = require('imagekit');
+const { config } = require('../config/env.config');
 
-const imagekit = new ImageKit({
-  publicKey: process.env.IMAGEKIT_PUBLIC_KEY,
-  privateKey: process.env.IMAGEKIT_PRIVATE_KEY,
-  urlEndpoint: process.env.IMAGEKIT_URL_ENDPOINT,
-});
+let imagekitInstance = null;
 
-async function uploadFile(file, filename) {
-  const response = await imagekit.upload({
-    file: file,
-    fileName: filename,
-    folder: 'SocialSync',
-  });
+function getImageKit() {
+  if (!imagekitInstance) {
+    imagekitInstance = new ImageKit({
+      publicKey: config.imageKit.publicKey,
+      privateKey: config.imageKit.privateKey,
+      urlEndpoint: config.imageKit.urlEndpoint,
+    });
+  }
+  return imagekitInstance;
+}
 
-  return response;
+/**
+ * Uploads a file buffer to ImageKit CDN storage
+ * @param {Buffer} fileBuffer - The binary file buffer
+ * @param {string} filename - The destination filename
+ * @returns {Promise<object>} ImageKit upload response object containing url, fileId, etc.
+ */
+async function uploadFile(fileBuffer, filename) {
+  try {
+    const ik = getImageKit();
+    const response = await ik.upload({
+      file: fileBuffer,
+      fileName: filename,
+      folder: 'SocialSync',
+    });
+
+    return response;
+  } catch (error) {
+    throw new Error(`Media upload to storage failed: ${error.message}`);
+  }
 }
 
 module.exports = uploadFile;

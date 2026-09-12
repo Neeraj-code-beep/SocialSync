@@ -1,13 +1,19 @@
 const userModel = require('../models/user.models');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
+const { config } = require('../config/env.config');
 
+const COOKIE_OPTIONS = {
+  httpOnly: true,
+  secure: config.isProduction,
+  sameSite: 'lax',
+  maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+};
 
 // ============================================================
 // REGISTER CONTROLLER
 // ============================================================
-
-async function registerController(req, res) {
+async function registerController(req, res, next) {
   try {
     const { username, email, password } = req.body;
 
@@ -16,6 +22,13 @@ async function registerController(req, res) {
       return res.status(400).json({
         success: false,
         message: 'Username, email and password are required',
+      });
+    }
+
+    if (password.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: 'Password must be at least 6 characters long',
       });
     }
 
@@ -32,7 +45,6 @@ async function registerController(req, res) {
     });
 
     if (existingUser) {
-      // Give a more useful error message
       if (existingUser.username === normalizedUsername) {
         return res.status(409).json({
           success: false,
@@ -63,26 +75,21 @@ async function registerController(req, res) {
       password: hashedPassword,
     });
 
-    // Generate JWT
+    // Generate JWT with mandatory secret
     const token = jwt.sign(
       {
         user: user._id,
       },
-      process.env.JWT_SECRET || 'secret',
+      config.jwtSecret,
       {
         expiresIn: '7d',
       }
     );
 
-    // Store token in cookie
-    res.cookie('token', token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-    });
+    // Store token in HTTP-only cookie
+    res.cookie('token', token, COOKIE_OPTIONS);
 
-    // Send response
+    // Send response (exclude password)
     return res.status(201).json({
       success: true,
       message: 'User registered successfully',
@@ -94,42 +101,15 @@ async function registerController(req, res) {
       },
     });
   } catch (error) {
-    console.error('Register Controller Error:', error);
-
-    return res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-    });
+    return next(error);
   }
 }
-
 
 // ============================================================
 // LOGIN CONTROLLER
 // ============================================================
-
-async function loginController(req, res) {
+async function loginController(req, res, next) {
   try {
-    /*
-      "identifier" can contain either:
-
-      username
-      OR
-      email
-
-      Example:
-
-      {
-        "identifier": "dheeraj"
-      }
-
-      OR
-
-      {
-        "identifier": "dheeraj@gmail.com"
-      }
-    */
-
     const { identifier, username, password } = req.body;
     const loginIdentifier = identifier || username;
 
@@ -152,45 +132,37 @@ async function loginController(req, res) {
       ],
     });
 
-    // Do not reveal whether username/email exists
+    // Do not reveal whether username/email exists to prevent account enumeration
     if (!user) {
       return res.status(401).json({
         success: false,
-        message: 'Invalid username/email or password',
+        message: 'Invalid credentials',
       });
     }
 
     // Compare password
-    const isPasswordValid = await bcrypt.compare(
-      password,
-      user.password
-    );
+    const isPasswordValid = await bcrypt.compare(password, user.password);
 
     if (!isPasswordValid) {
       return res.status(401).json({
         success: false,
-        message: 'Invalid username/email or password',
+        message: 'Invalid credentials',
       });
     }
 
-    // Generate JWT
+    // Generate JWT with mandatory secret
     const token = jwt.sign(
       {
         user: user._id,
       },
-      process.env.JWT_SECRET || 'secret',
+      config.jwtSecret,
       {
         expiresIn: '7d',
       }
     );
 
-    // Store JWT in cookie
-    res.cookie('token', token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-    });
+    // Store JWT in HTTP-only cookie
+    res.cookie('token', token, COOKIE_OPTIONS);
 
     // Send response
     return res.status(200).json({
@@ -204,21 +176,31 @@ async function loginController(req, res) {
       },
     });
   } catch (error) {
-    console.error('Login Controller Error:', error);
-
-    return res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-    });
+    return next(error);
   }
 }
 
+// ============================================================
+// LOGOUT CONTROLLER
+// ============================================================
+async function logoutController(req, res) {
+  res.clearCookie('token', {
+    httpOnly: true,
+    secure: config.isProduction,
+    sameSite: 'lax',
+  });
+
+  return res.status(200).json({
+    success: true,
+    message: 'User logged out successfully',
+  });
+}
 
 // ============================================================
 // EXPORTS
 // ============================================================
-
 module.exports = {
   registerController,
   loginController,
+  logoutController,
 };

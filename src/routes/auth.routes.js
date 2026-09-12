@@ -3,21 +3,17 @@ const router = express.Router();
 const {
   registerController,
   loginController,
+  logoutController,
 } = require('../controllers/auth.controller');
 const healthChecker = require('../controllers/health.controller');
-
-/*
-POST /register
-POST /login
-GET /user [protected
-]
-*/
-
 const authMiddleware = require('../middlewares/auth.middleware');
+const { authLimiter } = require('../middlewares/rateLimiter.middleware');
 
-router.post('/register', registerController);
-router.post('/login', loginController);
+router.post('/register', authLimiter, registerController);
+router.post('/login', authLimiter, loginController);
+router.post('/logout', logoutController);
 router.get('/health', healthChecker);
+
 router.get('/me', authMiddleware, (req, res) => {
   res.status(200).json({
     success: true,

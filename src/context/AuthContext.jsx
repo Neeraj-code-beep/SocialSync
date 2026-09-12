@@ -74,7 +74,12 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  const logout = () => {
+  const logout = async () => {
+    try {
+      await authService.logout();
+    } catch (err) {
+      console.error('Logout error:', err);
+    }
     setToken(null);
     setUser(null);
     localStorage.removeItem('captionai_token');
