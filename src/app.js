@@ -56,7 +56,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/posts', postRoutes);
 
 // 7. 404 Handler for Unmatched API Routes
-app.use('/api/*', notFoundHandler);
+app.use('/api', notFoundHandler);
 
 // 8. Centralized Error Handler
 app.use(errorHandler);
