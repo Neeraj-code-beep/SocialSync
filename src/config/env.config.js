@@ -7,6 +7,10 @@ const REQUIRED_ENV_VARS = [
   'IMAGEKIT_PUBLIC_KEY',
   'IMAGEKIT_PRIVATE_KEY',
   'IMAGEKIT_URL_ENDPOINT',
+  'LINKEDIN_CLIENT_ID',
+  'LINKEDIN_CLIENT_SECRET',
+  'LINKEDIN_REDIRECT_URI',
+  'SOCIAL_TOKEN_ENCRYPTION_KEY',
 ];
 
 function validateEnv() {
@@ -23,6 +27,15 @@ function validateEnv() {
       `[Startup Error] Missing required environment variable(s): ${missing.join(', ')}. Please check your .env configuration.`
     );
   }
+
+  if (
+    process.env.SOCIAL_TOKEN_ENCRYPTION_KEY &&
+    process.env.SOCIAL_TOKEN_ENCRYPTION_KEY.length < 32
+  ) {
+    throw new Error(
+      '[Startup Error] SOCIAL_TOKEN_ENCRYPTION_KEY must be at least 32 characters long for AES-256 security.'
+    );
+  }
 }
 
 const config = {
@@ -37,6 +50,12 @@ const config = {
     publicKey: process.env.IMAGEKIT_PUBLIC_KEY,
     privateKey: process.env.IMAGEKIT_PRIVATE_KEY,
     urlEndpoint: process.env.IMAGEKIT_URL_ENDPOINT,
+  },
+  socialTokenEncryptionKey: process.env.SOCIAL_TOKEN_ENCRYPTION_KEY,
+  linkedin: {
+    clientId: process.env.LINKEDIN_CLIENT_ID,
+    clientSecret: process.env.LINKEDIN_CLIENT_SECRET,
+    redirectUri: process.env.LINKEDIN_REDIRECT_URI,
   },
 };
 

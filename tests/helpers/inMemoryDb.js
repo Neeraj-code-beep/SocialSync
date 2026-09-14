@@ -3,11 +3,15 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const userModel = require('../../src/models/user.models');
 const postModel = require('../../src/models/post.model');
+const OAuthState = require('../../src/models/oauthState.model');
+const SocialAccount = require('../../src/models/socialAccount.model');
 const { config } = require('../../src/config/env.config');
 
 // In-Memory Collections Store
 let usersCollection = [];
 let postsCollection = [];
+let oauthStatesCollection = [];
+let socialAccountsCollection = [];
 
 // Helper to deep clone objects
 const clone = (obj) => JSON.parse(JSON.stringify(obj));
@@ -142,12 +146,149 @@ function setupInMemoryDb() {
 
     return queryChain;
   };
+
+  // --- OAUTH STATE INTERCEPTS ---
+  OAuthState.create = function (doc) {
+    const _id = new mongoose.Types.ObjectId();
+    const now = new Date();
+    const newState = {
+      _id,
+      ...doc,
+      user: doc.user?.toString() || doc.user,
+      createdAt: now,
+    };
+    oauthStatesCollection.push(newState);
+    return Promise.resolve(newState);
+  };
+
+  OAuthState.findOne = function (filter = {}) {
+    const match = oauthStatesCollection.find((s) => {
+      if (filter.state && s.state !== filter.state) return false;
+      if (filter.platform && s.platform !== filter.platform) return false;
+      return true;
+    });
+    return Promise.resolve(match ? clone(match) : null);
+  };
+
+  OAuthState.findOneAndDelete = function (filter = {}) {
+    const index = oauthStatesCollection.findIndex((s) => {
+      if (filter.state && s.state !== filter.state) return false;
+      if (filter.platform && s.platform !== filter.platform) return false;
+      return true;
+    });
+
+    if (index === -1) {
+      return Promise.resolve(null);
+    }
+
+    const [deleted] = oauthStatesCollection.splice(index, 1);
+    return Promise.resolve(clone(deleted));
+  };
+
+  // --- SOCIAL ACCOUNT INTERCEPTS ---
+  SocialAccount.create = function (doc) {
+    const _id = new mongoose.Types.ObjectId();
+    const now = new Date();
+    const newAccount = {
+      _id,
+      ...doc,
+      user: doc.user?.toString() || doc.user,
+      createdAt: now,
+      updatedAt: now,
+    };
+    socialAccountsCollection.push(newAccount);
+    return Promise.resolve(newAccount);
+  };
+
+  SocialAccount.findOneAndUpdate = function (filter, update, options = {}) {
+    const matchIndex = socialAccountsCollection.findIndex((a) => {
+      if (filter.user && a.user?.toString() !== filter.user?.toString()) return false;
+      if (filter.platform && a.platform !== filter.platform) return false;
+      if (filter.platformUserId && a.platformUserId !== filter.platformUserId) return false;
+      return true;
+    });
+
+    const now = new Date();
+
+    if (matchIndex !== -1) {
+      const existing = socialAccountsCollection[matchIndex];
+      const updated = {
+        ...existing,
+        ...update,
+        updatedAt: now,
+      };
+      socialAccountsCollection[matchIndex] = updated;
+      return Promise.resolve(clone(updated));
+    }
+
+    if (options.upsert) {
+      const _id = new mongoose.Types.ObjectId();
+      const newAccount = {
+        _id,
+        user: filter.user?.toString() || filter.user,
+        platform: filter.platform,
+        platformUserId: filter.platformUserId,
+        connectionStatus: 'connected',
+        scopes: [],
+        ...update,
+        createdAt: now,
+        updatedAt: now,
+      };
+      socialAccountsCollection.push(newAccount);
+      return Promise.resolve(clone(newAccount));
+    }
+
+    return Promise.resolve(null);
+  };
+
+  SocialAccount.findOne = function (filter = {}) {
+    const match = socialAccountsCollection.find((a) => {
+      if (filter.user && a.user?.toString() !== filter.user?.toString()) return false;
+      if (filter.platform && a.platform !== filter.platform) return false;
+      if (filter.platformUserId && a.platformUserId !== filter.platformUserId) return false;
+      return true;
+    });
+    return Promise.resolve(match ? clone(match) : null);
+  };
+
+  SocialAccount.find = function (filter = {}) {
+    let results = [...socialAccountsCollection];
+    if (filter.user) {
+      const targetUser = filter.user?.toString();
+      results = results.filter((a) => a.user?.toString() === targetUser);
+    }
+    if (filter.platform) {
+      results = results.filter((a) => a.platform === filter.platform);
+    }
+
+    const queryChain = {
+      sort: function () {
+        return queryChain;
+      },
+      select: function () {
+        return queryChain;
+      },
+      lean: function () {
+        return queryChain;
+      },
+      then: function (resolve, reject) {
+        return Promise.resolve(results.map(clone)).then(resolve, reject);
+      },
+      catch: function (reject) {
+        return Promise.resolve([]).catch(reject);
+      },
+    };
+
+    return queryChain;
+  };
 }
 
 // Reset data store between tests
 function clearDb() {
   usersCollection = [];
   postsCollection = [];
+  oauthStatesCollection = [];
+  socialAccountsCollection = [];
 }
 
 // Helper to seed a test user
@@ -191,10 +332,39 @@ function seedPost(userId, custom = {}) {
   return post;
 }
 
+// Helper to seed social account
+function seedSocialAccount(userId, custom = {}) {
+  const _id = new mongoose.Types.ObjectId();
+  const account = {
+    _id,
+    user: userId.toString(),
+    platform: custom.platform || 'linkedin',
+    platformUserId: custom.platformUserId || `li_sub_${Date.now()}`,
+    displayName: custom.displayName || 'LinkedIn Tester',
+    email: custom.email || 'tester@linkedin.com',
+    profileImageUrl: custom.profileImageUrl || 'https://media.licdn.com/mock.jpg',
+    profileUrl: custom.profileUrl || null,
+    accessToken: custom.accessToken || {
+      ciphertext: 'deadbeef123',
+      iv: 'aabbcc112233',
+      tag: 'ffeedd998877',
+      version: 'v1',
+    },
+    expiresAt: custom.expiresAt || new Date(Date.now() + 5184000 * 1000),
+    scopes: custom.scopes || ['openid', 'profile', 'email', 'w_member_social'],
+    connectionStatus: custom.connectionStatus || 'connected',
+    createdAt: custom.createdAt || new Date(),
+    updatedAt: custom.updatedAt || new Date(),
+  };
+  socialAccountsCollection.push(account);
+  return account;
+}
+
 module.exports = {
   setupInMemoryDb,
   clearDb,
   seedUser,
   seedPost,
+  seedSocialAccount,
   generateTestToken,
 };

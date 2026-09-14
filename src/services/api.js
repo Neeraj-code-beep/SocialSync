@@ -116,4 +116,15 @@ export const postService = {
   createPost: captionService.generateCaption,
 };
 
+export const socialService = {
+  getAccounts: async () => {
+    const response = await api.get('/social/accounts');
+    return response.data;
+  },
+  getLinkedInConnectUrl: async () => {
+    const response = await api.get('/social/linkedin/connect');
+    return response.data;
+  },
+};
+
 export default api;

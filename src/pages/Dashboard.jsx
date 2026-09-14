@@ -11,9 +11,13 @@ import {
   ChevronRight,
   AlertCircle,
   RefreshCw,
+  Linkedin,
+  ExternalLink,
+  ShieldCheck,
+  CheckCircle2,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { captionService } from '../services/api';
+import { captionService, socialService } from '../services/api';
 import Navbar from '../components/layout/Navbar';
 import Footer from '../components/layout/Footer';
 import GlassCard from '../components/GlassCard';
@@ -25,10 +29,15 @@ import { LoadingOverlay } from '../components/LoadingSpinner';
 import { usePageTitle } from '../hooks/usePageTitle';
 
 const Dashboard = () => {
-  usePageTitle('Workspace — CaptionAI');
+  usePageTitle('Workspace — SocialSync');
   const [selectedFile, setSelectedFile] = useState(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatedCaption, setGeneratedCaption] = useState('');
+
+  // Connected Social Accounts State
+  const [socialAccounts, setSocialAccounts] = useState([]);
+  const [isLoadingAccounts, setIsLoadingAccounts] = useState(true);
+  const [isConnectingLinkedIn, setIsConnectingLinkedIn] = useState(false);
 
   // Persistent Post History States
   const [posts, setPosts] = useState([]);
@@ -43,6 +52,20 @@ const Dashboard = () => {
     hasMore: false,
   });
   const [copiedPostId, setCopiedPostId] = useState(null);
+
+  const fetchSocialAccounts = useCallback(async () => {
+    setIsLoadingAccounts(true);
+    try {
+      const res = await socialService.getAccounts();
+      if (res.success) {
+        setSocialAccounts(res.accounts || []);
+      }
+    } catch (err) {
+      console.error('Failed to fetch connected social accounts:', err);
+    } finally {
+      setIsLoadingAccounts(false);
+    }
+  }, []);
 
   const fetchPosts = useCallback(async (page = 1) => {
     setIsLoadingPosts(true);
@@ -63,9 +86,48 @@ const Dashboard = () => {
     }
   }, []);
 
+  // Handle OAuth redirect query parameters (success / failure feedback)
+  useEffect(() => {
+    fetchSocialAccounts();
+
+    const searchParams = new URLSearchParams(window.location.search);
+    const connectionStatus = searchParams.get('connection');
+    const accountName = searchParams.get('account');
+    const reason = searchParams.get('reason');
+
+    if (connectionStatus === 'linkedin_success') {
+      toast.success(
+        accountName ? `LinkedIn connected as ${accountName}!` : 'LinkedIn account connected successfully!'
+      );
+      fetchSocialAccounts();
+      window.history.replaceState({}, document.title, window.location.pathname);
+    } else if (connectionStatus === 'linkedin_error') {
+      toast.error(reason || 'Failed to connect LinkedIn. Please try again.');
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, [fetchSocialAccounts]);
+
   useEffect(() => {
     fetchPosts(currentPage);
   }, [currentPage, fetchPosts]);
+
+  const handleConnectLinkedIn = async () => {
+    setIsConnectingLinkedIn(true);
+    try {
+      const res = await socialService.getLinkedInConnectUrl();
+      if (res.success && res.authorizationUrl) {
+        window.location.href = res.authorizationUrl;
+      } else {
+        toast.error('Could not initiate LinkedIn connection.');
+        setIsConnectingLinkedIn(false);
+      }
+    } catch (err) {
+      console.error('LinkedIn connect initiation error:', err);
+      const msg = err.response?.data?.message || 'Failed to start LinkedIn connection.';
+      toast.error(msg);
+      setIsConnectingLinkedIn(false);
+    }
+  };
 
   const handleFileSelect = (file) => {
     setSelectedFile(file);
@@ -126,17 +188,66 @@ const Dashboard = () => {
 
       <main className="flex-1 max-w-7xl mx-auto px-4 sm:px-6 w-full py-8">
         {/* Workspace Title Header */}
-        <div className="mb-8 border-b border-[#E7E4DE] pb-6">
-          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-[#66645F] mb-1">
-            <span className="w-2 h-2 rounded-full bg-[#C8F135]" />
-            <span>CREATE</span>
+        <div className="mb-8 border-b border-[#E7E4DE] pb-6 flex flex-col md:flex-row md:items-end justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-[#66645F] mb-1">
+              <span className="w-2 h-2 rounded-full bg-[#C8F135]" />
+              <span>CREATE & SYNC</span>
+            </div>
+            <h1 className="text-2xl sm:text-3xl font-semibold text-[#171717] font-sans">
+              Give your photo the right words
+            </h1>
+            <p className="text-sm text-[#66645F] mt-1">
+              Upload an image to generate engagement-focused captions and connect your social accounts.
+            </p>
           </div>
-          <h1 className="text-2xl sm:text-3xl font-semibold text-[#171717] font-sans">
-            Give your photo the right words
-          </h1>
-          <p className="text-sm text-[#66645F] mt-1">
-            Upload an image to generate engagement-focused social media captions.
-          </p>
+
+          {/* Social Platform Quick Status */}
+          <div className="flex items-center gap-3">
+            {isLoadingAccounts ? (
+              <div className="h-10 w-44 bg-white border border-[#E7E4DE] rounded-xl animate-pulse" />
+            ) : (() => {
+              const linkedinAccount = socialAccounts.find((a) => a.platform === 'linkedin');
+              if (linkedinAccount) {
+                return (
+                  <div className="flex items-center gap-3 px-3.5 py-2 rounded-xl bg-white border border-[#E7E4DE] shadow-2xs">
+                    {linkedinAccount.profileImageUrl ? (
+                      <img
+                        src={linkedinAccount.profileImageUrl}
+                        alt={linkedinAccount.displayName}
+                        className="w-7 h-7 rounded-full object-cover border border-[#E7E4DE]"
+                      />
+                    ) : (
+                      <div className="w-7 h-7 rounded-full bg-[#0077B5]/10 text-[#0077B5] flex items-center justify-center font-bold text-xs">
+                        in
+                      </div>
+                    )}
+                    <div className="text-left">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs font-semibold text-[#171717]">
+                          {linkedinAccount.displayName}
+                        </span>
+                        <span className="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                          Connected
+                        </span>
+                      </div>
+                      <span className="text-[10px] text-[#66645F]">LinkedIn Profile</span>
+                    </div>
+                  </div>
+                );
+              }
+              return (
+                <button
+                  onClick={handleConnectLinkedIn}
+                  disabled={isConnectingLinkedIn}
+                  className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-[#0077B5] hover:bg-[#006097] text-white text-xs font-semibold shadow-2xs transition-all cursor-pointer disabled:opacity-50"
+                >
+                  <Linkedin className="w-3.5 h-3.5 fill-current" />
+                  <span>{isConnectingLinkedIn ? 'Connecting...' : 'Connect LinkedIn'}</span>
+                </button>
+              );
+            })()}
+          </div>
         </div>
 
         {/* Studio Workspace Grid */}

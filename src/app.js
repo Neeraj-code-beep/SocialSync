@@ -9,6 +9,7 @@ const healthChecker = require('./controllers/health.controller');
 
 const authRoutes = require('./routes/auth.routes');
 const postRoutes = require('./routes/post.routes');
+const socialRoutes = require('./routes/social.routes');
 
 const app = express();
 
@@ -54,6 +55,7 @@ app.get('/health', healthChecker);
 // 6. Application API Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/posts', postRoutes);
+app.use('/api/social', socialRoutes);
 
 // 7. 404 Handler for Unmatched API Routes
 app.use('/api', notFoundHandler);
