@@ -17,7 +17,7 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { captionService, socialService } from '../services/api';
+import { captionService, socialService, postService } from '../services/api';
 import Navbar from '../components/layout/Navbar';
 import Footer from '../components/layout/Footer';
 import GlassCard from '../components/GlassCard';
@@ -33,11 +33,16 @@ const Dashboard = () => {
   const [selectedFile, setSelectedFile] = useState(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatedCaption, setGeneratedCaption] = useState('');
+  const [currentPostId, setCurrentPostId] = useState(null);
 
   // Connected Social Accounts State
   const [socialAccounts, setSocialAccounts] = useState([]);
   const [isLoadingAccounts, setIsLoadingAccounts] = useState(true);
   const [isConnectingLinkedIn, setIsConnectingLinkedIn] = useState(false);
+
+  // Publishing State Management
+  const [publishingPostId, setPublishingPostId] = useState(null);
+  const [publishedPosts, setPublishedPosts] = useState({}); // { [postId]: { platformPostId, publishedAt } }
 
   // Persistent Post History States
   const [posts, setPosts] = useState([]);
@@ -149,6 +154,9 @@ const Dashboard = () => {
     try {
       const res = await captionService.generateCaption(selectedFile);
       setGeneratedCaption(res.caption);
+      if (res.post?._id) {
+        setCurrentPostId(res.post._id);
+      }
       toast.success('Caption generated!');
 
       // Prepend newly persisted post to the list if on first page
@@ -169,6 +177,51 @@ const Dashboard = () => {
       toast.error(msg);
     } finally {
       setIsGenerating(false);
+    }
+  };
+
+  const handlePublishToLinkedIn = async (postId) => {
+    if (!postId) return;
+    const linkedinAccount = socialAccounts.find(
+      (a) => a.platform === 'linkedin' && a.connectionStatus === 'connected'
+    );
+
+    if (!linkedinAccount) {
+      toast.error('Please connect your LinkedIn account first.');
+      handleConnectLinkedIn();
+      return;
+    }
+
+    setPublishingPostId(postId);
+    try {
+      const res = await postService.publishToLinkedIn(postId, linkedinAccount._id);
+      if (res.success) {
+        toast.success('Post published to LinkedIn successfully!');
+        setPublishedPosts((prev) => ({
+          ...prev,
+          [postId]: {
+            platformPostId: res.publication?.platformPostId,
+            publishedAt: res.publication?.publishedAt || new Date().toISOString(),
+          },
+        }));
+      }
+    } catch (err) {
+      console.error('LinkedIn publishing error:', err);
+      if (err.response?.status === 409) {
+        toast('Post is already published to LinkedIn.', { icon: 'ℹ️' });
+        setPublishedPosts((prev) => ({
+          ...prev,
+          [postId]: {
+            publishedAt: new Date().toISOString(),
+          },
+        }));
+      } else {
+        const msg =
+          err.response?.data?.message || err.message || 'Failed to publish post to LinkedIn.';
+        toast.error(msg);
+      }
+    } finally {
+      setPublishingPostId(null);
     }
   };
 
@@ -298,9 +351,30 @@ const Dashboard = () => {
                     <span>Generated caption</span>
                   </span>
                   {generatedCaption && (
-                    <span className="text-xs font-semibold text-[#171717] bg-[#C8F135] px-2.5 py-1 rounded-full">
-                      Ready to post
-                    </span>
+                    <div className="flex items-center gap-2">
+                      {currentPostId && (
+                        publishedPosts[currentPostId] ? (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                            <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                            <span>Published to LinkedIn</span>
+                          </span>
+                        ) : (
+                          <button
+                            onClick={() => handlePublishToLinkedIn(currentPostId)}
+                            disabled={publishingPostId === currentPostId}
+                            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#0077B5] hover:bg-[#006097] text-white text-xs font-semibold transition-all cursor-pointer disabled:opacity-50 shadow-2xs"
+                          >
+                            <Linkedin className="w-3 h-3 fill-current" />
+                            <span>
+                              {publishingPostId === currentPostId ? 'Publishing...' : 'Publish to LinkedIn'}
+                            </span>
+                          </button>
+                        )
+                      )}
+                      <span className="text-xs font-semibold text-[#171717] bg-[#C8F135] px-2.5 py-1 rounded-full">
+                        Ready to post
+                      </span>
+                    </div>
                   )}
                 </h2>
 
@@ -460,23 +534,44 @@ const Dashboard = () => {
                         : 'Recent'}
                     </span>
 
-                    <button
-                      onClick={() => handleCopyPostCaption(post.caption, post._id)}
-                      className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#F4F2ED] hover:bg-[#E7E4DE] text-xs font-semibold text-[#171717] border border-[#E7E4DE] transition-colors cursor-pointer"
-                      title="Copy caption"
-                    >
-                      {copiedPostId === post._id ? (
-                        <>
-                          <Check className="w-3 h-3 text-emerald-600" />
-                          <span className="text-[11px]">Copied</span>
-                        </>
+                    <div className="flex items-center gap-2">
+                      {publishedPosts[post._id] ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-1 rounded-md border border-emerald-200">
+                          <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                          <span>Published</span>
+                        </span>
                       ) : (
-                        <>
-                          <Copy className="w-3 h-3 text-[#66645F]" />
-                          <span className="text-[11px]">Copy</span>
-                        </>
+                        <button
+                          onClick={() => handlePublishToLinkedIn(post._id)}
+                          disabled={publishingPostId === post._id}
+                          className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#0077B5] hover:bg-[#006097] text-white text-xs font-semibold shadow-2xs transition-all cursor-pointer disabled:opacity-50"
+                          title="Publish text to LinkedIn"
+                        >
+                          <Linkedin className="w-3 h-3 fill-current" />
+                          <span>
+                            {publishingPostId === post._id ? 'Publishing...' : 'Publish'}
+                          </span>
+                        </button>
                       )}
-                    </button>
+
+                      <button
+                        onClick={() => handleCopyPostCaption(post.caption, post._id)}
+                        className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#F4F2ED] hover:bg-[#E7E4DE] text-xs font-semibold text-[#171717] border border-[#E7E4DE] transition-colors cursor-pointer"
+                        title="Copy caption"
+                      >
+                        {copiedPostId === post._id ? (
+                          <>
+                            <Check className="w-3 h-3 text-emerald-600" />
+                            <span className="text-[11px]">Copied</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3 h-3 text-[#66645F]" />
+                            <span className="text-[11px]">Copy</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
                   </div>
                 </GlassCard>
               ))}

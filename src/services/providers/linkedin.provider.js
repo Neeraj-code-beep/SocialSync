@@ -5,6 +5,8 @@ const LINKEDIN_AUTH_URL = 'https://www.linkedin.com/oauth/v2/authorization';
 const LINKEDIN_TOKEN_URL = 'https://www.linkedin.com/oauth/v2/accessToken';
 const LINKEDIN_USERINFO_URL = 'https://api.linkedin.com/v2/userinfo';
 
+const LINKEDIN_POSTS_URL = 'https://api.linkedin.com/rest/posts';
+
 // Official current self-serve LinkedIn permissions:
 // openid, profile, email (Sign In with LinkedIn using OpenID Connect)
 // w_member_social (Share on LinkedIn / create posts on behalf of member)
@@ -139,6 +141,110 @@ const linkedinProvider = {
         error.message ||
         'Failed to fetch member identity from LinkedIn.';
       throw new Error(`LinkedIn profile error: ${providerError}`);
+    }
+  },
+
+  /**
+   * Publishes an organic text-only post to LinkedIn using official REST Posts API
+   * POST https://api.linkedin.com/rest/posts
+   *
+   * @param {{ accessToken: string, authorUrn: string, commentary: string }} params
+   * @returns {Promise<{ success: boolean, platformPostId: string, status: string, providerMetadata: object }>}
+   */
+  async publishTextPost({ accessToken, authorUrn, commentary }) {
+    if (!accessToken) {
+      const err = new Error('Access token is required to publish post to LinkedIn.');
+      err.status = 401;
+      throw err;
+    }
+
+    if (!authorUrn) {
+      const err = new Error('Author URN/ID is required to publish post to LinkedIn.');
+      err.status = 400;
+      throw err;
+    }
+
+    if (!commentary || typeof commentary !== 'string' || commentary.trim().length === 0) {
+      const err = new Error('Post commentary text cannot be empty.');
+      err.status = 400;
+      throw err;
+    }
+
+    // Standardize author URN (urn:li:person:{sub} or direct URN)
+    const formattedAuthor = authorUrn.startsWith('urn:li:')
+      ? authorUrn
+      : `urn:li:person:${authorUrn}`;
+
+    const apiVersion = config.linkedin.apiVersion || '202401';
+
+    const payload = {
+      author: formattedAuthor,
+      commentary: commentary.trim(),
+      visibility: 'PUBLIC',
+      distribution: {
+        feedDistribution: 'MAIN_FEED',
+        targetEntities: [],
+        thirdPartyDistributionChannels: [],
+      },
+      lifecycleState: 'PUBLISHED',
+      isReshareDisabledByAuthor: false,
+    };
+
+    const headers = {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+      'X-Restli-Protocol-Version': '2.0.0',
+      'Linkedin-Version': apiVersion,
+    };
+
+    try {
+      const response = await axios.post(LINKEDIN_POSTS_URL, payload, {
+        headers,
+        timeout: 15000,
+      });
+
+      // Extract x-restli-id from response headers
+      const platformPostId =
+        response.headers?.['x-restli-id'] ||
+        response.headers?.['X-RestLi-Id'] ||
+        response.headers?.['x-restli-id'.toLowerCase()];
+
+      if (!platformPostId) {
+        const err = new Error('LinkedIn Posts API did not return post identifier (x-restli-id).');
+        err.status = 502;
+        throw err;
+      }
+
+      return {
+        success: true,
+        platformPostId,
+        status: 'published',
+        providerMetadata: {
+          apiVersion,
+          lifecycleState: 'PUBLISHED',
+          visibility: 'PUBLIC',
+        },
+      };
+    } catch (error) {
+      // Avoid re-wrapping our own custom thrown error
+      if (error.status === 502 && error.message.includes('x-restli-id')) {
+        throw error;
+      }
+
+      const responseStatus = error.response?.status;
+      const responseData = error.response?.data;
+      const rawMessage =
+        responseData?.message ||
+        responseData?.error_description ||
+        responseData?.error ||
+        error.message ||
+        'LinkedIn Posts API request failed.';
+
+      const err = new Error(`LinkedIn Posts API error: ${rawMessage}`);
+      err.status = responseStatus || 502;
+      err.providerErrorCode = responseData?.serviceErrorCode || responseData?.code || 'LINKEDIN_ERROR';
+      err.providerMessage = rawMessage;
+      throw err;
     }
   },
 

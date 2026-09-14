@@ -114,6 +114,16 @@ export const captionService = {
 export const postService = {
   getPosts: captionService.getPosts,
   createPost: captionService.generateCaption,
+  publishToLinkedIn: async (postId, socialAccountId) => {
+    const response = await api.post(`/posts/${postId}/publish/linkedin`, {
+      socialAccountId,
+    });
+    return response.data;
+  },
+  getPublications: async (postId) => {
+    const response = await api.get(`/posts/${postId}/publications`);
+    return response.data;
+  },
 };
 
 export const socialService = {
@@ -124,6 +134,9 @@ export const socialService = {
   getLinkedInConnectUrl: async () => {
     const response = await api.get('/social/linkedin/connect');
     return response.data;
+  },
+  publishToLinkedIn: async (postId, socialAccountId) => {
+    return postService.publishToLinkedIn(postId, socialAccountId);
   },
 };
 
