@@ -7,6 +7,7 @@ const OAuthState = require('../../src/models/oauthState.model');
 const SocialAccount = require('../../src/models/socialAccount.model');
 const Publication = require('../../src/models/publication.model');
 const { config } = require('../../src/config/env.config');
+const { encrypt } = require('../../src/lib/encryption');
 
 // In-Memory Collections Store
 let usersCollection = [];
@@ -512,7 +513,7 @@ function seedPost(userId, custom = {}) {
   const post = {
     _id,
     caption: custom.caption || 'Sample test caption for social media #viral',
-    image: custom.image || 'https://ik.imagekit.io/mock/test.jpg',
+    image: custom.image !== undefined ? custom.image : 'https://ik.imagekit.io/mock/test.jpg',
     user: userId.toString(),
     createdAt: custom.createdAt || new Date(),
     updatedAt: custom.updatedAt || new Date(),
@@ -533,12 +534,7 @@ function seedSocialAccount(userId, custom = {}) {
     email: custom.email || 'tester@linkedin.com',
     profileImageUrl: custom.profileImageUrl || 'https://media.licdn.com/mock.jpg',
     profileUrl: custom.profileUrl || null,
-    accessToken: custom.accessToken || {
-      ciphertext: 'deadbeef123',
-      iv: 'aabbcc112233',
-      tag: 'ffeedd998877',
-      version: 'v1',
-    },
+    accessToken: custom.accessToken || encrypt('default_mock_access_token_12345'),
     expiresAt: custom.expiresAt || new Date(Date.now() + 5184000 * 1000),
     scopes: custom.scopes || ['openid', 'profile', 'email', 'w_member_social'],
     connectionStatus: custom.connectionStatus || 'connected',

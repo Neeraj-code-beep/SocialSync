@@ -366,7 +366,7 @@ const Dashboard = () => {
                           >
                             <Linkedin className="w-3 h-3 fill-current" />
                             <span>
-                              {publishingPostId === currentPostId ? 'Publishing...' : 'Publish to LinkedIn'}
+                              {publishingPostId === currentPostId ? 'Publishing image...' : 'Publish to LinkedIn'}
                             </span>
                           </button>
                         )
@@ -545,7 +545,7 @@ const Dashboard = () => {
                           onClick={() => handlePublishToLinkedIn(post._id)}
                           disabled={publishingPostId === post._id}
                           className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#0077B5] hover:bg-[#006097] text-white text-xs font-semibold shadow-2xs transition-all cursor-pointer disabled:opacity-50"
-                          title="Publish text to LinkedIn"
+                          title="Publish to LinkedIn"
                         >
                           <Linkedin className="w-3 h-3 fill-current" />
                           <span>
