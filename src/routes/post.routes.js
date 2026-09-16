@@ -10,6 +10,7 @@ const {
   syncPublicationController,
   updatePublicationCommentaryController,
   deletePublicationController,
+  getPublicationAnalyticsController,
 } = require('../controllers/post.controller');
 const upload = require('../middlewares/upload.middleware');
 const { aiLimiter } = require('../middlewares/rateLimiter.middleware');
@@ -42,6 +43,9 @@ router.get('/:postId/publications', authMiddleware, getPostPublicationsControlle
 
 /* GET /api/posts/:postId/publications/:publicationId [protected] - Get single publication */
 router.get('/:postId/publications/:publicationId', authMiddleware, getPublicationController);
+
+/* GET /api/posts/:postId/publications/:publicationId/analytics [protected] - Get publication analytics */
+router.get('/:postId/publications/:publicationId/analytics', authMiddleware, getPublicationAnalyticsController);
 
 /* POST /api/posts/:postId/publications/:publicationId/sync [protected] - Sync publication from LinkedIn */
 router.post('/:postId/publications/:publicationId/sync', authMiddleware, syncPublicationController);

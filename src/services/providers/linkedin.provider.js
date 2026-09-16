@@ -7,11 +7,13 @@ const LINKEDIN_USERINFO_URL = 'https://api.linkedin.com/v2/userinfo';
 
 const LINKEDIN_POSTS_URL = 'https://api.linkedin.com/rest/posts';
 const LINKEDIN_IMAGES_URL = 'https://api.linkedin.com/rest/images?action=initializeUpload';
+const LINKEDIN_ANALYTICS_URL = 'https://api.linkedin.com/rest/memberCreatorPostAnalytics';
 
 // Official current self-serve LinkedIn permissions:
 // openid, profile, email (Sign In with LinkedIn using OpenID Connect)
 // w_member_social (Share on LinkedIn / create posts on behalf of member)
-const REQUIRED_SCOPES = ['openid', 'profile', 'email', 'w_member_social'];
+// r_member_postAnalytics (Member Post Statistics / Creator Analytics)
+const REQUIRED_SCOPES = ['openid', 'profile', 'email', 'w_member_social', 'r_member_postAnalytics'];
 
 // Supported image formats for LinkedIn Images REST API
 const SUPPORTED_IMAGE_MIMES = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif'];
@@ -745,6 +747,255 @@ const linkedinProvider = {
   },
 
   /**
+   * Retrieves analytics for a specific LinkedIn post
+   * GET https://api.linkedin.com/rest/memberCreatorPostAnalytics?q=entity&entity=...
+   *
+   * @param {{ accessToken: string, postUrn: string, aggregation?: 'TOTAL'|'DAILY', dateRange?: { start: string|Date, end: string|Date }, metrics?: string[] }} params
+   * @returns {Promise<{ success: boolean, platformPostId: string, aggregation: string, dateRange: object|null, metrics: { impressions: number|null, membersReached: number|null, reactions: number|null, comments: number|null, reshares: number|null }, providerMetadata: object }>}
+   */
+  async getPostAnalytics({ accessToken, postUrn, aggregation = 'TOTAL', dateRange, metrics = [] }) {
+    if (!accessToken) {
+      const err = new Error('Access token is required to fetch LinkedIn post analytics.');
+      err.status = 401;
+      err.code = 'ANALYTICS_UNAUTHORIZED';
+      throw err;
+    }
+
+    if (!postUrn || typeof postUrn !== 'string' || postUrn.trim().length === 0) {
+      const err = new Error('Post URN is required to fetch LinkedIn post analytics.');
+      err.status = 400;
+      err.code = 'ANALYTICS_INVALID_REQUEST';
+      throw err;
+    }
+
+    const cleanUrn = postUrn.trim();
+    const normalizedAgg = (aggregation || 'TOTAL').toUpperCase();
+    if (!['TOTAL', 'DAILY'].includes(normalizedAgg)) {
+      const err = new Error(`Unsupported aggregation: ${aggregation}. Must be 'TOTAL' or 'DAILY'.`);
+      err.status = 400;
+      err.code = 'ANALYTICS_INVALID_REQUEST';
+      throw err;
+    }
+
+    // Validation: MEMBERS_REACHED is not supported with DAILY aggregation by LinkedIn API
+    const requestedMetrics = Array.isArray(metrics) ? metrics.map((m) => m.toUpperCase()) : [];
+    if (normalizedAgg === 'DAILY' && requestedMetrics.includes('MEMBERS_REACHED')) {
+      const err = new Error('MEMBERS_REACHED metric is not supported for DAILY aggregation by LinkedIn API.');
+      err.status = 400;
+      err.code = 'ANALYTICS_INVALID_REQUEST';
+      throw err;
+    }
+
+    let parsedStartDate = null;
+    let parsedEndDate = null;
+    let restliDateRangeStr = '';
+
+    if (dateRange && (dateRange.start || dateRange.end)) {
+      if (!dateRange.start || !dateRange.end) {
+        const err = new Error('Both start and end dates are required when specifying a date range.');
+        err.status = 400;
+        err.code = 'ANALYTICS_INVALID_REQUEST';
+        throw err;
+      }
+
+      parsedStartDate = new Date(dateRange.start);
+      parsedEndDate = new Date(dateRange.end);
+
+      if (isNaN(parsedStartDate.getTime()) || isNaN(parsedEndDate.getTime())) {
+        const err = new Error('Invalid date format provided in dateRange.');
+        err.status = 400;
+        err.code = 'ANALYTICS_INVALID_REQUEST';
+        throw err;
+      }
+
+      if (parsedStartDate > parsedEndDate) {
+        const err = new Error('startDate cannot be after endDate.');
+        err.status = 400;
+        err.code = 'ANALYTICS_INVALID_REQUEST';
+        throw err;
+      }
+
+      const startYear = parsedStartDate.getUTCFullYear();
+      const startMonth = parsedStartDate.getUTCMonth() + 1;
+      const startDay = parsedStartDate.getUTCDate();
+
+      const endYear = parsedEndDate.getUTCFullYear();
+      const endMonth = parsedEndDate.getUTCMonth() + 1;
+      const endDay = parsedEndDate.getUTCDate();
+
+      restliDateRangeStr = `,dateRange:(start:(year:${startYear},month:${startMonth},day:${startDay}),end:(year:${endYear},month:${endMonth},day:${endDay}))`;
+    }
+
+    const apiVersion = config.linkedin.apiVersion || '202608';
+    const entityParam = `(postUrn:${encodeURIComponent(cleanUrn)},aggregation:${normalizedAgg}${restliDateRangeStr})`;
+
+    const headers = {
+      Authorization: `Bearer ${accessToken}`,
+      'X-Restli-Protocol-Version': '2.0.0',
+      'Linkedin-Version': apiVersion,
+    };
+
+    try {
+      const response = await axios.get(LINKEDIN_ANALYTICS_URL, {
+        params: {
+          q: 'entity',
+          entity: entityParam,
+        },
+        headers,
+        timeout: 15000,
+      });
+
+      const data = response.data || {};
+      const parsedMetrics = {
+        impressions: null,
+        membersReached: null,
+        reactions: null,
+        comments: null,
+        reshares: null,
+      };
+
+      // Helper to assign metric value safely
+      const setMetric = (key, val) => {
+        if (typeof val === 'number' && !isNaN(val)) {
+          parsedMetrics[key] = (parsedMetrics[key] || 0) + val;
+        } else if (typeof val === 'string' && !isNaN(Number(val))) {
+          parsedMetrics[key] = (parsedMetrics[key] || 0) + Number(val);
+        }
+      };
+
+      // 1. Direct fields check (if top-level object)
+      if (data.impressions !== undefined) setMetric('impressions', data.impressions);
+      if (data.membersReached !== undefined) setMetric('membersReached', data.membersReached);
+      if (data.uniqueImpressions !== undefined) setMetric('membersReached', data.uniqueImpressions);
+      if (data.reactions !== undefined) setMetric('reactions', data.reactions);
+      if (data.likes !== undefined) setMetric('reactions', data.likes);
+      if (data.comments !== undefined) setMetric('comments', data.comments);
+      if (data.reshares !== undefined) setMetric('reshares', data.reshares);
+      if (data.shares !== undefined) setMetric('reshares', data.shares);
+
+      // 2. Elements list parsing
+      const elements = Array.isArray(data.elements)
+        ? data.elements
+        : data.elements
+        ? [data.elements]
+        : [];
+
+      for (const el of elements) {
+        if (!el) continue;
+
+        // Metric entry breakdown
+        const metricType = (el.metricType || el.type || el.metric || '').toUpperCase();
+        const value = el.value !== undefined ? el.value : el.count !== undefined ? el.count : el.total;
+
+        if (metricType) {
+          if (metricType.includes('IMPRESSION') && !metricType.includes('UNIQUE') && !metricType.includes('MEMBER')) {
+            setMetric('impressions', value);
+          } else if (
+            metricType.includes('MEMBER') ||
+            metricType.includes('REACH') ||
+            metricType.includes('UNIQUE_IMPRESSION')
+          ) {
+            setMetric('membersReached', value);
+          } else if (metricType.includes('REACTION') || metricType.includes('LIKE')) {
+            setMetric('reactions', value);
+          } else if (metricType.includes('COMMENT')) {
+            setMetric('comments', value);
+          } else if (metricType.includes('RESHARE') || metricType.includes('SHARE')) {
+            setMetric('reshares', value);
+          }
+        }
+
+        // Direct keys inside element
+        if (el.impressions !== undefined) setMetric('impressions', el.impressions);
+        if (el.membersReached !== undefined) setMetric('membersReached', el.membersReached);
+        if (el.uniqueImpressions !== undefined) setMetric('membersReached', el.uniqueImpressions);
+        if (el.reactions !== undefined) setMetric('reactions', el.reactions);
+        if (el.likes !== undefined) setMetric('reactions', el.likes);
+        if (el.comments !== undefined) setMetric('comments', el.comments);
+        if (el.reshares !== undefined) setMetric('reshares', el.reshares);
+        if (el.shares !== undefined) setMetric('reshares', el.shares);
+
+        // Nested entries inside element
+        if (Array.isArray(el.entry) || Array.isArray(el.entries)) {
+          const entries = el.entry || el.entries;
+          for (const entry of entries) {
+            const entryType = (entry.metricType || entry.type || entry.metric || '').toUpperCase();
+            const entryVal = entry.value !== undefined ? entry.value : entry.count !== undefined ? entry.count : entry.total;
+            if (entryType.includes('IMPRESSION') && !entryType.includes('UNIQUE') && !entryType.includes('MEMBER')) {
+              setMetric('impressions', entryVal);
+            } else if (
+              entryType.includes('MEMBER') ||
+              entryType.includes('REACH') ||
+              entryType.includes('UNIQUE_IMPRESSION')
+            ) {
+              setMetric('membersReached', entryVal);
+            } else if (entryType.includes('REACTION') || entryType.includes('LIKE')) {
+              setMetric('reactions', entryVal);
+            } else if (entryType.includes('COMMENT')) {
+              setMetric('comments', entryVal);
+            } else if (entryType.includes('RESHARE') || entryType.includes('SHARE')) {
+              setMetric('reshares', entryVal);
+            }
+          }
+        }
+      }
+
+      return {
+        success: true,
+        platformPostId: cleanUrn,
+        aggregation: normalizedAgg,
+        dateRange: parsedStartDate && parsedEndDate ? { start: parsedStartDate, end: parsedEndDate } : null,
+        metrics: parsedMetrics,
+        providerMetadata: {
+          apiVersion,
+          totalElements: elements.length,
+        },
+      };
+    } catch (error) {
+      if (error.code && error.code.startsWith('ANALYTICS_')) {
+        throw error;
+      }
+
+      const responseStatus = error.response?.status;
+      const responseData = error.response?.data;
+      const rawMessage =
+        responseData?.message ||
+        responseData?.error_description ||
+        responseData?.error ||
+        error.message ||
+        'LinkedIn Member Creator Post Analytics request failed.';
+
+      let normalizedCode = 'ANALYTICS_PROVIDER_UNAVAILABLE';
+      let userFriendlyMessage = `LinkedIn Analytics error: ${rawMessage}`;
+
+      if (responseStatus === 400) {
+        normalizedCode = 'ANALYTICS_INVALID_REQUEST';
+      } else if (responseStatus === 401) {
+        normalizedCode = 'ANALYTICS_UNAUTHORIZED';
+        userFriendlyMessage = 'LinkedIn authorization expired or invalid. Please reconnect your account.';
+      } else if (responseStatus === 403) {
+        normalizedCode = 'ANALYTICS_FORBIDDEN';
+        userFriendlyMessage =
+          'LinkedIn member post analytics permission (r_member_postAnalytics) missing or access denied. Please reconnect your LinkedIn account.';
+      } else if (responseStatus === 404) {
+        normalizedCode = 'ANALYTICS_NOT_FOUND';
+        userFriendlyMessage = 'Post not found or analytics not yet available for this post on LinkedIn.';
+      } else if (responseStatus === 429) {
+        normalizedCode = 'ANALYTICS_RATE_LIMITED';
+        userFriendlyMessage = 'LinkedIn analytics rate limit reached. Please try again later.';
+      }
+
+      const err = new Error(userFriendlyMessage);
+      err.status = responseStatus || 502;
+      err.code = normalizedCode;
+      err.providerErrorCode =
+        responseData?.serviceErrorCode || responseData?.code || 'LINKEDIN_ANALYTICS_ERROR';
+      err.providerMessage = rawMessage;
+      throw err;
+    }
+  },
+
+  /**
    * Returns supported capabilities for the LinkedIn integration slice
    */
   capabilities() {
@@ -754,6 +1005,7 @@ const linkedinProvider = {
       canPostImage: true,
       canUpdate: true,
       canDelete: true,
+      canGetAnalytics: true,
       supportedImageFormats: SUPPORTED_IMAGE_MIMES,
       maxImageSizeBytes: 10 * 1024 * 1024, // 10MB
       canSchedule: false,

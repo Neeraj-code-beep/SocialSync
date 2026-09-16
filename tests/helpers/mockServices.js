@@ -53,6 +53,16 @@ let mockGetPostResult = {
   },
 };
 
+let mockAnalyticsResult = {
+  elements: [
+    { metricType: 'IMPRESSION', value: 250 },
+    { metricType: 'MEMBERS_REACHED', value: 180 },
+    { metricType: 'REACTION', value: 15 },
+    { metricType: 'COMMENT', value: 4 },
+    { metricType: 'RESHARE', value: 2 },
+  ],
+};
+
 let mockImageFetchBuffer = Buffer.from('mock-valid-jpeg-image-binary-bytes');
 let mockImageFetchContentType = 'image/jpeg';
 let mockImageFetchError = null;
@@ -65,6 +75,7 @@ let lastAxiosImageFetch = null;
 let lastAxiosGetPost = null;
 let lastAxiosUpdatePost = null;
 let lastAxiosDeletePost = null;
+let lastAxiosAnalytics = null;
 
 let publishErrorToThrow = null;
 let shouldMissingPostId = false;
@@ -74,6 +85,7 @@ let mockUploadError = null;
 let mockGetPostError = null;
 let mockUpdatePostError = null;
 let mockDeletePostError = null;
+let mockAnalyticsError = null;
 
 let shouldAiFail = false;
 let shouldStorageFail = false;
@@ -137,6 +149,30 @@ function setupServiceMocks() {
         status: 200,
         headers: { 'linkedin-version': '202608', 'x-restli-protocol-version': '2.0.0' },
         data: mockGetPostResult,
+      };
+    }
+
+    // 3. LinkedIn Member Post Analytics API (/rest/memberCreatorPostAnalytics)
+    if (typeof url === 'string' && url.includes('memberCreatorPostAnalytics')) {
+      lastAxiosAnalytics = { url, params: options.params, headers: options.headers };
+
+      if (mockAnalyticsError) {
+        const err = new Error(mockAnalyticsError.message || 'LinkedIn Member Creator Analytics API error');
+        err.response = {
+          status: mockAnalyticsError.status || 502,
+          data: {
+            serviceErrorCode: mockAnalyticsError.errorCode || 'LINKEDIN_ANALYTICS_ERROR',
+            message: mockAnalyticsError.message || 'Failed to fetch post analytics',
+            code: mockAnalyticsError.errorCode,
+          },
+        };
+        throw err;
+      }
+
+      return {
+        status: 200,
+        headers: { 'linkedin-version': '202608', 'x-restli-protocol-version': '2.0.0' },
+        data: mockAnalyticsResult,
       };
     }
 
@@ -386,6 +422,16 @@ function resetServiceMocks() {
     },
   };
 
+  mockAnalyticsResult = {
+    elements: [
+      { metricType: 'IMPRESSION', value: 250 },
+      { metricType: 'MEMBERS_REACHED', value: 180 },
+      { metricType: 'REACTION', value: 15 },
+      { metricType: 'COMMENT', value: 4 },
+      { metricType: 'RESHARE', value: 2 },
+    ],
+  };
+
   mockImageFetchBuffer = Buffer.from('mock-valid-jpeg-image-binary-bytes');
   mockImageFetchContentType = 'image/jpeg';
   mockImageFetchError = null;
@@ -398,6 +444,7 @@ function resetServiceMocks() {
   lastAxiosGetPost = null;
   lastAxiosUpdatePost = null;
   lastAxiosDeletePost = null;
+  lastAxiosAnalytics = null;
 
   publishErrorToThrow = null;
   shouldMissingPostId = false;
@@ -407,6 +454,7 @@ function resetServiceMocks() {
   mockGetPostError = null;
   mockUpdatePostError = null;
   mockDeletePostError = null;
+  mockAnalyticsError = null;
 
   shouldAiFail = false;
   shouldStorageFail = false;
@@ -494,6 +542,14 @@ function setMockDeletePostError(errorObj) {
   mockDeletePostError = errorObj;
 }
 
+function setMockAnalyticsResult(data) {
+  mockAnalyticsResult = data;
+}
+
+function setMockAnalyticsError(errorObj) {
+  mockAnalyticsError = errorObj;
+}
+
 function getLastAxiosPostsPayload() {
   return lastAxiosPostsPayload;
 }
@@ -522,6 +578,10 @@ function getLastAxiosDeletePost() {
   return lastAxiosDeletePost;
 }
 
+function getLastAxiosAnalytics() {
+  return lastAxiosAnalytics;
+}
+
 module.exports = {
   setupServiceMocks,
   resetServiceMocks,
@@ -543,6 +603,8 @@ module.exports = {
   setMockGetPostError,
   setMockUpdatePostError,
   setMockDeletePostError,
+  setMockAnalyticsResult,
+  setMockAnalyticsError,
   getLastAxiosPostsPayload,
   getLastAxiosInitializeUpload,
   getLastAxiosPutPayload,
@@ -550,4 +612,5 @@ module.exports = {
   getLastAxiosGetPost,
   getLastAxiosUpdatePost,
   getLastAxiosDeletePost,
+  getLastAxiosAnalytics,
 };

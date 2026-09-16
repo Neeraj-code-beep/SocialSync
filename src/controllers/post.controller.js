@@ -3,6 +3,7 @@ const net = require('net');
 const postModel = require('../models/post.model');
 const SocialAccount = require('../models/socialAccount.model');
 const Publication = require('../models/publication.model');
+const AnalyticsSnapshot = require('../models/analyticsSnapshot.model');
 const generateCaption = require('../services/ai.service');
 const uploadFile = require('../services/storage.service');
 const { linkedinProvider } = require('../services/providers');
@@ -1122,6 +1123,162 @@ const deletePublicationController = async (req, res, next) => {
   }
 };
 
+/**
+ * Retrieves analytics for a published LinkedIn publication and persists a snapshot
+ * GET /api/posts/:postId/publications/:publicationId/analytics
+ */
+const getPublicationAnalyticsController = async (req, res, next) => {
+  const { postId, publicationId } = req.params;
+  const { aggregation = 'TOTAL', startDate, endDate, metrics } = req.query;
+  const userId = req.user._id;
+
+  if (!postId || (mongoose.Types.ObjectId.isValid && !mongoose.Types.ObjectId.isValid(postId))) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid or missing postId.',
+    });
+  }
+
+  if (!publicationId || (mongoose.Types.ObjectId.isValid && !mongoose.Types.ObjectId.isValid(publicationId))) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid or missing publicationId.',
+    });
+  }
+
+  try {
+    const post = await postModel.findOne({ _id: postId, user: userId });
+    if (!post) {
+      return res.status(404).json({
+        success: false,
+        message: 'Post not found or unauthorized.',
+      });
+    }
+
+    const publication = await Publication.findOne({ _id: publicationId, post: post._id });
+    if (!publication) {
+      return res.status(404).json({
+        success: false,
+        message: 'Publication not found or unauthorized.',
+      });
+    }
+
+    const socialAccount = await SocialAccount.findOne({
+      _id: publication.socialAccount,
+      user: userId,
+    }).select('+accessToken');
+
+    if (!socialAccount) {
+      return res.status(404).json({
+        success: false,
+        message: 'Social account not found or unauthorized.',
+      });
+    }
+
+    if (publication.platform !== 'linkedin') {
+      return res.status(400).json({
+        success: false,
+        message: 'Analytics are currently only supported for LinkedIn publications.',
+      });
+    }
+
+    if (publication.status !== 'published') {
+      return res.status(400).json({
+        success: false,
+        message: `Analytics are only available for published publications (current status: "${publication.status}").`,
+      });
+    }
+
+    if (!publication.platformPostId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Publication does not have a platform post ID to fetch analytics.',
+      });
+    }
+
+    // Parse metrics array if supplied as string
+    let parsedMetricsList = [];
+    if (metrics) {
+      if (Array.isArray(metrics)) {
+        parsedMetricsList = metrics;
+      } else if (typeof metrics === 'string') {
+        parsedMetricsList = metrics.split(',').map((m) => m.trim()).filter(Boolean);
+      }
+    }
+
+    let dateRange = null;
+    if (startDate || endDate) {
+      dateRange = { start: startDate, end: endDate };
+    }
+
+    // Decrypt access token
+    let decryptedToken;
+    try {
+      decryptedToken = decrypt(socialAccount.accessToken);
+    } catch {
+      return res.status(500).json({
+        success: false,
+        message: 'Security error: Failed to decrypt account credentials.',
+      });
+    }
+
+    try {
+      const analyticsResult = await linkedinProvider.getPostAnalytics({
+        accessToken: decryptedToken,
+        postUrn: publication.platformPostId,
+        aggregation,
+        dateRange,
+        metrics: parsedMetricsList,
+      });
+
+      decryptedToken = null;
+
+      // Persist immutable snapshot point-in-time observation
+      const snapshot = await AnalyticsSnapshot.create({
+        post: post._id,
+        publication: publication._id,
+        socialAccount: socialAccount._id,
+        platform: 'linkedin',
+        aggregation: analyticsResult.aggregation,
+        metrics: analyticsResult.metrics,
+        dateRange: analyticsResult.dateRange,
+        capturedAt: new Date(),
+        providerMetadata: analyticsResult.providerMetadata || {},
+      });
+
+      return res.status(200).json({
+        success: true,
+        platform: 'linkedin',
+        publicationId: publication._id,
+        platformPostId: publication.platformPostId,
+        aggregation: analyticsResult.aggregation,
+        dateRange: analyticsResult.dateRange,
+        metrics: analyticsResult.metrics,
+        capturedAt: snapshot.capturedAt,
+        snapshotId: snapshot._id,
+      });
+    } catch (providerError) {
+      decryptedToken = null;
+
+      const statusCode =
+        providerError.status && providerError.status >= 400 && providerError.status < 500
+          ? providerError.status
+          : 502;
+
+      return res.status(statusCode).json({
+        success: false,
+        message:
+          providerError.message ||
+          providerError.providerMessage ||
+          'Failed to retrieve LinkedIn post analytics.',
+        errorCode: providerError.code || providerError.providerErrorCode || 'ANALYTICS_ERROR',
+      });
+    }
+  } catch (error) {
+    return next(error);
+  }
+};
+
 module.exports = {
   createPostController,
   getPostsController,
@@ -1131,6 +1288,7 @@ module.exports = {
   syncPublicationController,
   updatePublicationCommentaryController,
   deletePublicationController,
+  getPublicationAnalyticsController,
   fetchAndValidatePostImage,
   validateImageUrlForSsrf,
   isPrivateOrBlockedIP,

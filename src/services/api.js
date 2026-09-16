@@ -142,6 +142,12 @@ export const postService = {
     const response = await api.delete(`/posts/${postId}/publications/${publicationId}`);
     return response.data;
   },
+  getPublicationAnalytics: async (postId, publicationId, params = {}) => {
+    const response = await api.get(`/posts/${postId}/publications/${publicationId}/analytics`, {
+      params,
+    });
+    return response.data;
+  },
 };
 
 export const socialService = {

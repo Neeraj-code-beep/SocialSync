@@ -6,6 +6,7 @@ const postModel = require('../../src/models/post.model');
 const OAuthState = require('../../src/models/oauthState.model');
 const SocialAccount = require('../../src/models/socialAccount.model');
 const Publication = require('../../src/models/publication.model');
+const AnalyticsSnapshot = require('../../src/models/analyticsSnapshot.model');
 const { config } = require('../../src/config/env.config');
 const { encrypt } = require('../../src/lib/encryption');
 
@@ -15,6 +16,7 @@ let postsCollection = [];
 let oauthStatesCollection = [];
 let socialAccountsCollection = [];
 let publicationsCollection = [];
+let analyticsSnapshotsCollection = [];
 
 // Helper to deep clone objects
 const clone = (obj) => JSON.parse(JSON.stringify(obj));
@@ -523,6 +525,71 @@ function setupInMemoryDb() {
 
     return queryChain;
   };
+
+  // --- ANALYTICS SNAPSHOT MODEL INTERCEPTS ---
+  AnalyticsSnapshot.create = function (doc) {
+    const _id = new mongoose.Types.ObjectId();
+    const now = new Date();
+    const newSnapshot = {
+      _id,
+      post: doc.post?.toString() || doc.post,
+      publication: doc.publication?.toString() || doc.publication,
+      socialAccount: doc.socialAccount?.toString() || doc.socialAccount,
+      platform: doc.platform || 'linkedin',
+      aggregation: doc.aggregation || 'TOTAL',
+      metrics: doc.metrics || {
+        impressions: null,
+        membersReached: null,
+        reactions: null,
+        comments: null,
+        reshares: null,
+      },
+      dateRange: doc.dateRange || null,
+      capturedAt: doc.capturedAt || now,
+      providerMetadata: doc.providerMetadata || {},
+      createdAt: now,
+      updatedAt: now,
+    };
+    analyticsSnapshotsCollection.push(newSnapshot);
+    return Promise.resolve(newSnapshot);
+  };
+
+  AnalyticsSnapshot.find = function (filter = {}) {
+    let results = analyticsSnapshotsCollection.filter((s) => {
+      if (filter.post && s.post?.toString() !== filter.post?.toString()) return false;
+      if (filter.publication && s.publication?.toString() !== filter.publication?.toString()) return false;
+      if (filter.socialAccount && s.socialAccount?.toString() !== filter.socialAccount?.toString()) return false;
+      if (filter.platform && s.platform !== filter.platform) return false;
+      return true;
+    });
+
+    const queryChain = {
+      sort: function () {
+        return queryChain;
+      },
+      lean: function () {
+        return queryChain;
+      },
+      then: function (resolve, reject) {
+        return Promise.resolve(results.map(clone)).then(resolve, reject);
+      },
+      catch: function (reject) {
+        return Promise.resolve([]).catch(reject);
+      },
+    };
+
+    return queryChain;
+  };
+
+  AnalyticsSnapshot.findOne = function (filter = {}) {
+    const match = analyticsSnapshotsCollection.find((s) => {
+      if (filter._id && s._id.toString() !== filter._id.toString()) return false;
+      if (filter.publication && s.publication?.toString() !== filter.publication?.toString()) return false;
+      if (filter.post && s.post?.toString() !== filter.post?.toString()) return false;
+      return true;
+    });
+    return Promise.resolve(match ? clone(match) : null);
+  };
 }
 
 // Reset data store between tests
@@ -532,6 +599,7 @@ function clearDb() {
   oauthStatesCollection = [];
   socialAccountsCollection = [];
   publicationsCollection = [];
+  analyticsSnapshotsCollection = [];
 }
 
 // Helper to seed a test user
@@ -589,7 +657,7 @@ function seedSocialAccount(userId, custom = {}) {
     profileUrl: custom.profileUrl || null,
     accessToken: custom.accessToken || encrypt('default_mock_access_token_12345'),
     expiresAt: custom.expiresAt || new Date(Date.now() + 5184000 * 1000),
-    scopes: custom.scopes || ['openid', 'profile', 'email', 'w_member_social'],
+    scopes: custom.scopes || ['openid', 'profile', 'email', 'w_member_social', 'r_member_postAnalytics'],
     connectionStatus: custom.connectionStatus || 'connected',
     createdAt: custom.createdAt || new Date(),
     updatedAt: custom.updatedAt || new Date(),
@@ -606,13 +674,13 @@ function seedPublication(postId, socialAccountId, custom = {}) {
     post: postId.toString(),
     socialAccount: socialAccountId.toString(),
     platform: custom.platform || 'linkedin',
-    platformPostId: custom.platformPostId || `urn:li:share:${Date.now()}`,
+    platformPostId: custom.platformPostId !== undefined ? custom.platformPostId : `urn:li:share:${Date.now()}`,
     status: custom.status || 'published',
     publishedAt: custom.publishedAt || new Date(),
     errorCode: custom.errorCode || null,
     errorMessage: custom.errorMessage || null,
     providerMetadata: custom.providerMetadata || {
-      apiVersion: '202401',
+      apiVersion: '202608',
       lifecycleState: 'PUBLISHED',
       visibility: 'PUBLIC',
     },
@@ -631,6 +699,33 @@ function seedPublication(postId, socialAccountId, custom = {}) {
   return publication;
 }
 
+// Helper to seed analytics snapshot
+function seedAnalyticsSnapshot(postId, publicationId, socialAccountId, custom = {}) {
+  const _id = new mongoose.Types.ObjectId();
+  const snapshot = {
+    _id,
+    post: postId.toString(),
+    publication: publicationId.toString(),
+    socialAccount: socialAccountId.toString(),
+    platform: custom.platform || 'linkedin',
+    aggregation: custom.aggregation || 'TOTAL',
+    metrics: custom.metrics || {
+      impressions: 150,
+      membersReached: 120,
+      reactions: 10,
+      comments: 3,
+      reshares: 2,
+    },
+    dateRange: custom.dateRange || null,
+    capturedAt: custom.capturedAt || new Date(),
+    providerMetadata: custom.providerMetadata || {},
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+  analyticsSnapshotsCollection.push(snapshot);
+  return snapshot;
+}
+
 module.exports = {
   setupInMemoryDb,
   clearDb,
@@ -638,5 +733,6 @@ module.exports = {
   seedPost,
   seedSocialAccount,
   seedPublication,
+  seedAnalyticsSnapshot,
   generateTestToken,
 };
