@@ -6,6 +6,10 @@ const {
   getPostsController,
   publishPostToLinkedInController,
   getPostPublicationsController,
+  getPublicationController,
+  syncPublicationController,
+  updatePublicationCommentaryController,
+  deletePublicationController,
 } = require('../controllers/post.controller');
 const upload = require('../middlewares/upload.middleware');
 const { aiLimiter } = require('../middlewares/rateLimiter.middleware');
@@ -35,5 +39,17 @@ router.post('/:postId/publish/linkedin', authMiddleware, publishPostToLinkedInCo
 
 /* GET /api/posts/:postId/publications [protected] - List publications for post */
 router.get('/:postId/publications', authMiddleware, getPostPublicationsController);
+
+/* GET /api/posts/:postId/publications/:publicationId [protected] - Get single publication */
+router.get('/:postId/publications/:publicationId', authMiddleware, getPublicationController);
+
+/* POST /api/posts/:postId/publications/:publicationId/sync [protected] - Sync publication from LinkedIn */
+router.post('/:postId/publications/:publicationId/sync', authMiddleware, syncPublicationController);
+
+/* PATCH /api/posts/:postId/publications/:publicationId [protected] - Update LinkedIn publication commentary */
+router.patch('/:postId/publications/:publicationId', authMiddleware, updatePublicationCommentaryController);
+
+/* DELETE /api/posts/:postId/publications/:publicationId [protected] - Delete publication on LinkedIn */
+router.delete('/:postId/publications/:publicationId', authMiddleware, deletePublicationController);
 
 module.exports = router;

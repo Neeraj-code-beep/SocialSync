@@ -532,6 +532,219 @@ const linkedinProvider = {
   },
 
   /**
+   * Retrieves a published LinkedIn post by its URN
+   * GET https://api.linkedin.com/rest/posts/{postUrn}
+   *
+   * @param {{ accessToken: string, postUrn: string }} params
+   * @returns {Promise<{ id: string, author: string, commentary: string, lifecycleState: string, visibility: string, publishedAt: Date|null, createdAt: Date|null, lastModifiedAt: Date|null, contentType: string }>}
+   */
+  async getPost({ accessToken, postUrn }) {
+    if (!accessToken) {
+      const err = new Error('Access token is required to fetch LinkedIn post.');
+      err.status = 401;
+      throw err;
+    }
+
+    if (!postUrn || typeof postUrn !== 'string' || postUrn.trim().length === 0) {
+      const err = new Error('Post URN is required to fetch LinkedIn post.');
+      err.status = 400;
+      throw err;
+    }
+
+    const apiVersion = config.linkedin.apiVersion || '202608';
+    const cleanUrn = postUrn.trim();
+    const encodedUrn = encodeURIComponent(cleanUrn);
+    const url = `${LINKEDIN_POSTS_URL}/${encodedUrn}`;
+
+    const headers = {
+      Authorization: `Bearer ${accessToken}`,
+      'X-Restli-Protocol-Version': '2.0.0',
+      'Linkedin-Version': apiVersion,
+    };
+
+    try {
+      const response = await axios.get(url, {
+        headers,
+        timeout: 15000,
+      });
+
+      const data = response.data || {};
+
+      let contentType = 'text';
+      if (data.content?.media) {
+        contentType = 'image';
+      }
+
+      return {
+        id: data.id || cleanUrn,
+        author: data.author || null,
+        commentary: data.commentary || '',
+        lifecycleState: data.lifecycleState || 'PUBLISHED',
+        visibility: data.visibility || 'PUBLIC',
+        publishedAt: data.publishedAt ? new Date(data.publishedAt) : null,
+        createdAt: data.createdAt ? new Date(data.createdAt) : null,
+        lastModifiedAt: data.lastModifiedAt ? new Date(data.lastModifiedAt) : null,
+        contentType,
+      };
+    } catch (error) {
+      const responseStatus = error.response?.status;
+      const responseData = error.response?.data;
+      const rawMessage =
+        responseData?.message ||
+        responseData?.error_description ||
+        responseData?.error ||
+        error.message ||
+        'Failed to fetch LinkedIn post.';
+
+      const err = new Error(`LinkedIn Posts API error: ${rawMessage}`);
+      err.status = responseStatus || 502;
+      err.providerErrorCode =
+        responseData?.serviceErrorCode || responseData?.code || 'LINKEDIN_ERROR';
+      err.providerMessage = rawMessage;
+      throw err;
+    }
+  },
+
+  /**
+   * Partially updates an existing LinkedIn post commentary
+   * POST https://api.linkedin.com/rest/posts/{postUrn} (with X-RestLi-Method: PARTIAL_UPDATE)
+   *
+   * @param {{ accessToken: string, postUrn: string, commentary: string }} params
+   * @returns {Promise<{ success: boolean, commentary: string }>}
+   */
+  async updatePost({ accessToken, postUrn, commentary }) {
+    if (!accessToken) {
+      const err = new Error('Access token is required to update LinkedIn post.');
+      err.status = 401;
+      throw err;
+    }
+
+    if (!postUrn || typeof postUrn !== 'string' || postUrn.trim().length === 0) {
+      const err = new Error('Post URN is required to update LinkedIn post.');
+      err.status = 400;
+      throw err;
+    }
+
+    if (!commentary || typeof commentary !== 'string' || commentary.trim().length === 0) {
+      const err = new Error('Post commentary text cannot be empty.');
+      err.status = 400;
+      throw err;
+    }
+
+    const apiVersion = config.linkedin.apiVersion || '202608';
+    const cleanUrn = postUrn.trim();
+    const encodedUrn = encodeURIComponent(cleanUrn);
+    const url = `${LINKEDIN_POSTS_URL}/${encodedUrn}`;
+    const trimmedCommentary = commentary.trim();
+
+    const payload = {
+      patch: {
+        $set: {
+          commentary: trimmedCommentary,
+        },
+      },
+    };
+
+    const headers = {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+      'X-Restli-Protocol-Version': '2.0.0',
+      'Linkedin-Version': apiVersion,
+      'X-RestLi-Method': 'PARTIAL_UPDATE',
+    };
+
+    try {
+      await axios.post(url, payload, {
+        headers,
+        timeout: 15000,
+      });
+
+      return {
+        success: true,
+        commentary: trimmedCommentary,
+      };
+    } catch (error) {
+      const responseStatus = error.response?.status;
+      const responseData = error.response?.data;
+      const rawMessage =
+        responseData?.message ||
+        responseData?.error_description ||
+        responseData?.error ||
+        error.message ||
+        'LinkedIn post update failed.';
+
+      const err = new Error(`LinkedIn Posts API error: ${rawMessage}`);
+      err.status = responseStatus || 502;
+      err.providerErrorCode =
+        responseData?.serviceErrorCode || responseData?.code || 'LINKEDIN_ERROR';
+      err.providerMessage = rawMessage;
+      throw err;
+    }
+  },
+
+  /**
+   * Deletes a published LinkedIn post by its URN
+   * DELETE https://api.linkedin.com/rest/posts/{postUrn}
+   *
+   * @param {{ accessToken: string, postUrn: string }} params
+   * @returns {Promise<{ success: boolean }>}
+   */
+  async deletePost({ accessToken, postUrn }) {
+    if (!accessToken) {
+      const err = new Error('Access token is required to delete LinkedIn post.');
+      err.status = 401;
+      throw err;
+    }
+
+    if (!postUrn || typeof postUrn !== 'string' || postUrn.trim().length === 0) {
+      const err = new Error('Post URN is required to delete LinkedIn post.');
+      err.status = 400;
+      throw err;
+    }
+
+    const apiVersion = config.linkedin.apiVersion || '202608';
+    const cleanUrn = postUrn.trim();
+    const encodedUrn = encodeURIComponent(cleanUrn);
+    const url = `${LINKEDIN_POSTS_URL}/${encodedUrn}`;
+
+    const headers = {
+      Authorization: `Bearer ${accessToken}`,
+      'X-Restli-Protocol-Version': '2.0.0',
+      'Linkedin-Version': apiVersion,
+      'X-RestLi-Method': 'DELETE',
+    };
+
+    try {
+      await axios.delete(url, {
+        headers,
+        timeout: 15000,
+      });
+
+      return { success: true };
+    } catch (error) {
+      const responseStatus = error.response?.status;
+      if (responseStatus === 404) {
+        return { success: true, alreadyDeleted: true };
+      }
+
+      const responseData = error.response?.data;
+      const rawMessage =
+        responseData?.message ||
+        responseData?.error_description ||
+        responseData?.error ||
+        error.message ||
+        'LinkedIn post deletion failed.';
+
+      const err = new Error(`LinkedIn Posts API error: ${rawMessage}`);
+      err.status = responseStatus || 502;
+      err.providerErrorCode =
+        responseData?.serviceErrorCode || responseData?.code || 'LINKEDIN_ERROR';
+      err.providerMessage = rawMessage;
+      throw err;
+    }
+  },
+
+  /**
    * Returns supported capabilities for the LinkedIn integration slice
    */
   capabilities() {
@@ -539,6 +752,8 @@ const linkedinProvider = {
       platform: 'linkedin',
       canPost: true,
       canPostImage: true,
+      canUpdate: true,
+      canDelete: true,
       supportedImageFormats: SUPPORTED_IMAGE_MIMES,
       maxImageSizeBytes: 10 * 1024 * 1024, // 10MB
       canSchedule: false,

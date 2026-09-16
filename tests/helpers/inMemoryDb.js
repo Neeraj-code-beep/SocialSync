@@ -101,7 +101,19 @@ function setupInMemoryDb() {
       if (filter.user && p.user?.toString() !== filter.user.toString()) return false;
       return true;
     });
-    let result = match ? clone(match) : null;
+    let result = match
+      ? {
+          ...clone(match),
+          save: function () {
+            this.updatedAt = new Date();
+            const idx = postsCollection.findIndex((p) => p._id.toString() === match._id.toString());
+            if (idx !== -1) {
+              postsCollection[idx] = { ...postsCollection[idx], ...this };
+            }
+            return Promise.resolve(this);
+          },
+        }
+      : null;
 
     const chain = {
       select: function () {
@@ -123,7 +135,19 @@ function setupInMemoryDb() {
   postModel.findById = function (id) {
     const stringId = id?.toString();
     const match = postsCollection.find((p) => p._id.toString() === stringId);
-    let result = match ? clone(match) : null;
+    let result = match
+      ? {
+          ...clone(match),
+          save: function () {
+            this.updatedAt = new Date();
+            const idx = postsCollection.findIndex((p) => p._id.toString() === match._id.toString());
+            if (idx !== -1) {
+              postsCollection[idx] = { ...postsCollection[idx], ...this };
+            }
+            return Promise.resolve(this);
+          },
+        }
+      : null;
 
     const chain = {
       select: function () {
@@ -409,20 +433,49 @@ function setupInMemoryDb() {
       return true;
     });
 
-    if (!match) return Promise.resolve(null);
-
-    const doc = {
-      ...clone(match),
-      save: function () {
-        this.updatedAt = new Date();
-        const idx = publicationsCollection.findIndex((p) => p._id.toString() === match._id.toString());
-        if (idx !== -1) {
-          publicationsCollection[idx] = { ...this };
+    let result = match
+      ? {
+          ...clone(match),
+          save: function () {
+            this.updatedAt = new Date();
+            const idx = publicationsCollection.findIndex((p) => p._id.toString() === match._id.toString());
+            if (idx !== -1) {
+              publicationsCollection[idx] = { ...publicationsCollection[idx], ...this };
+            }
+            return Promise.resolve(this);
+          },
         }
-        return Promise.resolve(this);
+      : null;
+
+    const chain = {
+      populate: function (field) {
+        if (result && field === 'socialAccount') {
+          const acc = socialAccountsCollection.find((a) => a._id.toString() === result.socialAccount?.toString());
+          if (acc) {
+            result.socialAccount = {
+              _id: acc._id,
+              displayName: acc.displayName,
+              platform: acc.platform,
+              profileImageUrl: acc.profileImageUrl,
+            };
+          }
+        }
+        return chain;
+      },
+      select: function () {
+        return chain;
+      },
+      lean: function () {
+        return chain;
+      },
+      then: function (resolve, reject) {
+        return Promise.resolve(result).then(resolve, reject);
+      },
+      catch: function (reject) {
+        return Promise.resolve(result).catch(reject);
       },
     };
-    return Promise.resolve(doc);
+    return chain;
   };
 
   Publication.find = function (filter = {}) {

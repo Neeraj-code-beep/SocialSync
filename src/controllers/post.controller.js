@@ -644,11 +644,493 @@ const getPostPublicationsController = async (req, res, next) => {
   }
 };
 
+/**
+ * Retrieves a single publication details
+ * GET /api/posts/:postId/publications/:publicationId
+ */
+const getPublicationController = async (req, res, next) => {
+  const { postId, publicationId } = req.params;
+  const userId = req.user._id;
+
+  if (!postId || (mongoose.Types.ObjectId.isValid && !mongoose.Types.ObjectId.isValid(postId))) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid or missing postId.',
+    });
+  }
+
+  if (!publicationId || (mongoose.Types.ObjectId.isValid && !mongoose.Types.ObjectId.isValid(publicationId))) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid or missing publicationId.',
+    });
+  }
+
+  try {
+    const post = await postModel.findOne({ _id: postId, user: userId });
+    if (!post) {
+      return res.status(404).json({
+        success: false,
+        message: 'Post not found or unauthorized.',
+      });
+    }
+
+    const publication = await Publication.findOne({ _id: publicationId, post: post._id })
+      .populate('socialAccount', 'displayName platform profileImageUrl')
+      .lean();
+
+    if (!publication) {
+      return res.status(404).json({
+        success: false,
+        message: 'Publication not found or unauthorized.',
+      });
+    }
+
+    // Verify social account belongs to authenticated user
+    const socialAccount = await SocialAccount.findOne({
+      _id: publication.socialAccount._id || publication.socialAccount,
+      user: userId,
+    });
+
+    if (!socialAccount) {
+      return res.status(404).json({
+        success: false,
+        message: 'Social account not found or unauthorized.',
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      publication,
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+/**
+ * Synchronizes a LinkedIn publication state from LinkedIn Posts API
+ * POST /api/posts/:postId/publications/:publicationId/sync
+ */
+const syncPublicationController = async (req, res, next) => {
+  const { postId, publicationId } = req.params;
+  const userId = req.user._id;
+
+  if (!postId || (mongoose.Types.ObjectId.isValid && !mongoose.Types.ObjectId.isValid(postId))) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid or missing postId.',
+    });
+  }
+
+  if (!publicationId || (mongoose.Types.ObjectId.isValid && !mongoose.Types.ObjectId.isValid(publicationId))) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid or missing publicationId.',
+    });
+  }
+
+  try {
+    const post = await postModel.findOne({ _id: postId, user: userId });
+    if (!post) {
+      return res.status(404).json({
+        success: false,
+        message: 'Post not found or unauthorized.',
+      });
+    }
+
+    const publication = await Publication.findOne({ _id: publicationId, post: post._id });
+    if (!publication) {
+      return res.status(404).json({
+        success: false,
+        message: 'Publication not found or unauthorized.',
+      });
+    }
+
+    const socialAccount = await SocialAccount.findOne({
+      _id: publication.socialAccount,
+      user: userId,
+    }).select('+accessToken');
+
+    if (!socialAccount) {
+      return res.status(404).json({
+        success: false,
+        message: 'Social account not found or unauthorized.',
+      });
+    }
+
+    if (publication.platform !== 'linkedin') {
+      return res.status(400).json({
+        success: false,
+        message: 'Only LinkedIn publications can be synchronized with this endpoint.',
+      });
+    }
+
+    if (!publication.platformPostId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Publication does not have a platform post ID to sync.',
+      });
+    }
+
+    // Decrypt access token
+    let decryptedToken;
+    try {
+      decryptedToken = decrypt(socialAccount.accessToken);
+    } catch {
+      return res.status(500).json({
+        success: false,
+        message: 'Security error: Failed to decrypt account credentials.',
+      });
+    }
+
+    try {
+      const linkedinPost = await linkedinProvider.getPost({
+        accessToken: decryptedToken,
+        postUrn: publication.platformPostId,
+      });
+
+      decryptedToken = null;
+
+      // Update publication safe metadata
+      publication.providerMetadata = {
+        ...(publication.providerMetadata || {}),
+        lifecycleState: linkedinPost.lifecycleState,
+        visibility: linkedinPost.visibility,
+        contentType: linkedinPost.contentType,
+        lastSyncedAt: new Date(),
+      };
+
+      if (
+        linkedinPost.lifecycleState === 'DELETED' ||
+        linkedinPost.lifecycleState === 'REVOKED'
+      ) {
+        publication.status = 'deleted';
+        publication.deletedAt = publication.deletedAt || new Date();
+      }
+
+      await publication.save();
+
+      return res.status(200).json({
+        success: true,
+        message: 'Publication synchronized successfully.',
+        publication,
+      });
+    } catch (providerError) {
+      decryptedToken = null;
+
+      // If LinkedIn returns 404, the post was deleted on LinkedIn
+      if (providerError.status === 404) {
+        publication.status = 'deleted';
+        publication.deletedAt = publication.deletedAt || new Date();
+        publication.providerMetadata = {
+          ...(publication.providerMetadata || {}),
+          lifecycleState: 'DELETED_ON_PROVIDER',
+          lastSyncedAt: new Date(),
+        };
+        await publication.save();
+
+        return res.status(200).json({
+          success: true,
+          message: 'Post was deleted on LinkedIn. Local publication marked as deleted.',
+          publication,
+        });
+      }
+
+      const statusCode =
+        providerError.status && providerError.status >= 400 && providerError.status < 600
+          ? providerError.status
+          : 502;
+
+      return res.status(statusCode).json({
+        success: false,
+        message: providerError.providerMessage || providerError.message || 'LinkedIn sync failed.',
+        errorCode: providerError.providerErrorCode || 'SYNC_ERROR',
+      });
+    }
+  } catch (error) {
+    return next(error);
+  }
+};
+
+/**
+ * Updates commentary of an existing LinkedIn publication
+ * PATCH /api/posts/:postId/publications/:publicationId
+ */
+const updatePublicationCommentaryController = async (req, res, next) => {
+  const { postId, publicationId } = req.params;
+  const { commentary } = req.body;
+  const userId = req.user._id;
+
+  if (!postId || (mongoose.Types.ObjectId.isValid && !mongoose.Types.ObjectId.isValid(postId))) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid or missing postId.',
+    });
+  }
+
+  if (!publicationId || (mongoose.Types.ObjectId.isValid && !mongoose.Types.ObjectId.isValid(publicationId))) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid or missing publicationId.',
+    });
+  }
+
+  if (!commentary || typeof commentary !== 'string' || commentary.trim().length === 0) {
+    return res.status(400).json({
+      success: false,
+      message: 'Post commentary text cannot be empty.',
+    });
+  }
+
+  const trimmedCommentary = commentary.trim();
+  if (trimmedCommentary.length > 3000) {
+    return res.status(400).json({
+      success: false,
+      message: 'Commentary exceeds maximum allowable length (3000 characters).',
+    });
+  }
+
+  try {
+    const post = await postModel.findOne({ _id: postId, user: userId });
+    if (!post) {
+      return res.status(404).json({
+        success: false,
+        message: 'Post not found or unauthorized.',
+      });
+    }
+
+    const publication = await Publication.findOne({ _id: publicationId, post: post._id });
+    if (!publication) {
+      return res.status(404).json({
+        success: false,
+        message: 'Publication not found or unauthorized.',
+      });
+    }
+
+    const socialAccount = await SocialAccount.findOne({
+      _id: publication.socialAccount,
+      user: userId,
+    }).select('+accessToken');
+
+    if (!socialAccount) {
+      return res.status(404).json({
+        success: false,
+        message: 'Social account not found or unauthorized.',
+      });
+    }
+
+    if (publication.platform !== 'linkedin') {
+      return res.status(400).json({
+        success: false,
+        message: 'Only LinkedIn publications can be updated with this endpoint.',
+      });
+    }
+
+    if (publication.status !== 'published') {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot update a publication with status "${publication.status}". Only published posts can be updated.`,
+      });
+    }
+
+    if (!publication.platformPostId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Publication does not have a valid platform post ID.',
+      });
+    }
+
+    // Decrypt access token
+    let decryptedToken;
+    try {
+      decryptedToken = decrypt(socialAccount.accessToken);
+    } catch {
+      return res.status(500).json({
+        success: false,
+        message: 'Security error: Failed to decrypt account credentials.',
+      });
+    }
+
+    try {
+      await linkedinProvider.updatePost({
+        accessToken: decryptedToken,
+        postUrn: publication.platformPostId,
+        commentary: trimmedCommentary,
+      });
+
+      decryptedToken = null;
+
+      // Only modify local Post state AFTER LinkedIn confirms success
+      post.caption = trimmedCommentary;
+      await post.save();
+
+      publication.providerMetadata = {
+        ...(publication.providerMetadata || {}),
+        lastModifiedAt: new Date(),
+      };
+      await publication.save();
+
+      return res.status(200).json({
+        success: true,
+        message: 'LinkedIn post commentary updated successfully.',
+        post,
+        publication,
+      });
+    } catch (providerError) {
+      decryptedToken = null;
+
+      const statusCode =
+        providerError.status && providerError.status >= 400 && providerError.status < 600
+          ? providerError.status
+          : 502;
+
+      return res.status(statusCode).json({
+        success: false,
+        message: providerError.providerMessage || providerError.message || 'LinkedIn post update failed.',
+        errorCode: providerError.providerErrorCode || 'UPDATE_ERROR',
+      });
+    }
+  } catch (error) {
+    return next(error);
+  }
+};
+
+/**
+ * Deletes a LinkedIn publication
+ * DELETE /api/posts/:postId/publications/:publicationId
+ */
+const deletePublicationController = async (req, res, next) => {
+  const { postId, publicationId } = req.params;
+  const userId = req.user._id;
+
+  if (!postId || (mongoose.Types.ObjectId.isValid && !mongoose.Types.ObjectId.isValid(postId))) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid or missing postId.',
+    });
+  }
+
+  if (!publicationId || (mongoose.Types.ObjectId.isValid && !mongoose.Types.ObjectId.isValid(publicationId))) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid or missing publicationId.',
+    });
+  }
+
+  try {
+    const post = await postModel.findOne({ _id: postId, user: userId });
+    if (!post) {
+      return res.status(404).json({
+        success: false,
+        message: 'Post not found or unauthorized.',
+      });
+    }
+
+    const publication = await Publication.findOne({ _id: publicationId, post: post._id });
+    if (!publication) {
+      return res.status(404).json({
+        success: false,
+        message: 'Publication not found or unauthorized.',
+      });
+    }
+
+    const socialAccount = await SocialAccount.findOne({
+      _id: publication.socialAccount,
+      user: userId,
+    }).select('+accessToken');
+
+    if (!socialAccount) {
+      return res.status(404).json({
+        success: false,
+        message: 'Social account not found or unauthorized.',
+      });
+    }
+
+    if (publication.platform !== 'linkedin') {
+      return res.status(400).json({
+        success: false,
+        message: 'Only LinkedIn publications can be deleted with this endpoint.',
+      });
+    }
+
+    if (!publication.platformPostId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Publication does not have a platform post ID to delete.',
+      });
+    }
+
+    // Idempotency: if already marked deleted, return success immediately
+    if (publication.status === 'deleted') {
+      return res.status(200).json({
+        success: true,
+        message: 'Publication is already deleted.',
+        publication,
+      });
+    }
+
+    // Decrypt access token
+    let decryptedToken;
+    try {
+      decryptedToken = decrypt(socialAccount.accessToken);
+    } catch {
+      return res.status(500).json({
+        success: false,
+        message: 'Security error: Failed to decrypt account credentials.',
+      });
+    }
+
+    try {
+      await linkedinProvider.deletePost({
+        accessToken: decryptedToken,
+        postUrn: publication.platformPostId,
+      });
+
+      decryptedToken = null;
+
+      // Mark publication deleted (do NOT physically delete document)
+      publication.status = 'deleted';
+      publication.deletedAt = new Date();
+      publication.providerMetadata = {
+        ...(publication.providerMetadata || {}),
+        lifecycleState: 'DELETED',
+      };
+      await publication.save();
+
+      return res.status(200).json({
+        success: true,
+        message: 'LinkedIn post deleted successfully.',
+        publication,
+      });
+    } catch (providerError) {
+      decryptedToken = null;
+
+      const statusCode =
+        providerError.status && providerError.status >= 400 && providerError.status < 600
+          ? providerError.status
+          : 502;
+
+      return res.status(statusCode).json({
+        success: false,
+        message: providerError.providerMessage || providerError.message || 'LinkedIn post deletion failed.',
+        errorCode: providerError.providerErrorCode || 'DELETE_ERROR',
+      });
+    }
+  } catch (error) {
+    return next(error);
+  }
+};
+
 module.exports = {
   createPostController,
   getPostsController,
   publishPostToLinkedInController,
   getPostPublicationsController,
+  getPublicationController,
+  syncPublicationController,
+  updatePublicationCommentaryController,
+  deletePublicationController,
   fetchAndValidatePostImage,
   validateImageUrlForSsrf,
   isPrivateOrBlockedIP,

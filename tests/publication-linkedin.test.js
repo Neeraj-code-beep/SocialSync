@@ -32,13 +32,20 @@ const {
   setMockImageFetchContentType,
   setMockImageFetchBuffer,
   setMockRedirectDestination,
+  setMockGetPostResult,
+  setMockGetPostError,
+  setMockUpdatePostError,
+  setMockDeletePostError,
   getLastAxiosPostsPayload,
   getLastAxiosInitializeUpload,
   getLastAxiosPutPayload,
   getLastAxiosImageFetch,
+  getLastAxiosGetPost,
+  getLastAxiosUpdatePost,
+  getLastAxiosDeletePost,
 } = require('./helpers/mockServices');
 
-describe('Phase 1.3B: LinkedIn Publishing (Text & Single-Image)', () => {
+describe('Phase 1.3B: LinkedIn Publishing (Text, Single-Image & Publication Management)', () => {
   beforeEach(() => {
     clearDb();
     resetServiceMocks();
@@ -1005,6 +1012,788 @@ describe('Phase 1.3B: LinkedIn Publishing (Text & Single-Image)', () => {
       assert.strictEqual(res.body.publications.length, 1);
       assert.strictEqual(res.body.publications[0].platformPostId, 'urn:li:share:998877');
       assert.strictEqual(res.body.publications[0].socialAccount.displayName, 'John Doe LinkedIn');
+    });
+  });
+
+  describe('6. LinkedIn Provider Publication Management Methods (Phase 1.3B-3)', () => {
+    const mockToken = 'mock_valid_token_mgmt_123';
+    const mockPostUrn = 'urn:li:share:1234567890';
+
+    describe('getPost', () => {
+      it('1. getPost successfully fetches and normalizes post details', async () => {
+        setMockGetPostResult({
+          id: 'urn:li:share:1234567890',
+          author: 'urn:li:person:alex_999',
+          commentary: 'Testing getPost retrieval #ai',
+          lifecycleState: 'PUBLISHED',
+          visibility: 'PUBLIC',
+          publishedAt: 1710000000000,
+          createdAt: 1710000000000,
+          lastModifiedAt: 1710000000000,
+          content: { media: { id: 'urn:li:image:123' } },
+        });
+
+        const post = await linkedinProvider.getPost({
+          accessToken: mockToken,
+          postUrn: mockPostUrn,
+        });
+
+        assert.strictEqual(post.id, 'urn:li:share:1234567890');
+        assert.strictEqual(post.author, 'urn:li:person:alex_999');
+        assert.strictEqual(post.commentary, 'Testing getPost retrieval #ai');
+        assert.strictEqual(post.lifecycleState, 'PUBLISHED');
+        assert.strictEqual(post.visibility, 'PUBLIC');
+        assert.strictEqual(post.contentType, 'image');
+        assert.ok(post.publishedAt instanceof Date);
+      });
+
+      it('2. getPost sends correct Authorization, Linkedin-Version, and Restli headers', async () => {
+        await linkedinProvider.getPost({
+          accessToken: mockToken,
+          postUrn: mockPostUrn,
+        });
+
+        const getPayload = getLastAxiosGetPost();
+        assert.strictEqual(getPayload.headers['Authorization'], `Bearer ${mockToken}`);
+        assert.strictEqual(getPayload.headers['Linkedin-Version'], '202608');
+        assert.strictEqual(getPayload.headers['X-Restli-Protocol-Version'], '2.0.0');
+      });
+
+      it('3. getPost correctly encodes the post URN in URL path', async () => {
+        await linkedinProvider.getPost({
+          accessToken: mockToken,
+          postUrn: 'urn:li:share:12345:special/char',
+        });
+
+        const getPayload = getLastAxiosGetPost();
+        assert.ok(getPayload.url.includes(encodeURIComponent('urn:li:share:12345:special/char')));
+      });
+
+      it('4. getPost handles 401 Unauthorized', async () => {
+        setMockGetPostError({ status: 401, errorCode: 'UNAUTHORIZED', message: 'Token invalid' });
+
+        await assert.rejects(
+          async () => {
+            await linkedinProvider.getPost({ accessToken: mockToken, postUrn: mockPostUrn });
+          },
+          (err) => {
+            assert.strictEqual(err.status, 401);
+            assert.strictEqual(err.providerErrorCode, 'UNAUTHORIZED');
+            return true;
+          }
+        );
+      });
+
+      it('5. getPost handles 403 Forbidden', async () => {
+        setMockGetPostError({ status: 403, errorCode: 'FORBIDDEN', message: 'Permission denied' });
+
+        await assert.rejects(
+          async () => {
+            await linkedinProvider.getPost({ accessToken: mockToken, postUrn: mockPostUrn });
+          },
+          (err) => {
+            assert.strictEqual(err.status, 403);
+            assert.strictEqual(err.providerErrorCode, 'FORBIDDEN');
+            return true;
+          }
+        );
+      });
+
+      it('6. getPost handles 404 Not Found', async () => {
+        setMockGetPostError({ status: 404, errorCode: 'NOT_FOUND', message: 'Post does not exist' });
+
+        await assert.rejects(
+          async () => {
+            await linkedinProvider.getPost({ accessToken: mockToken, postUrn: mockPostUrn });
+          },
+          (err) => {
+            assert.strictEqual(err.status, 404);
+            return true;
+          }
+        );
+      });
+
+      it('7. getPost handles 429 Rate Limit', async () => {
+        setMockGetPostError({ status: 429, errorCode: 'RATE_LIMIT', message: 'Too many requests' });
+
+        await assert.rejects(
+          async () => {
+            await linkedinProvider.getPost({ accessToken: mockToken, postUrn: mockPostUrn });
+          },
+          (err) => {
+            assert.strictEqual(err.status, 429);
+            return true;
+          }
+        );
+      });
+
+      it('8. getPost handles 5xx Server Error', async () => {
+        setMockGetPostError({ status: 500, errorCode: 'SERVER_ERROR', message: 'LinkedIn down' });
+
+        await assert.rejects(
+          async () => {
+            await linkedinProvider.getPost({ accessToken: mockToken, postUrn: mockPostUrn });
+          },
+          (err) => {
+            assert.strictEqual(err.status, 500);
+            return true;
+          }
+        );
+      });
+    });
+
+    describe('updatePost', () => {
+      it('9. updatePost successfully updates commentary and returns normalized result', async () => {
+        const res = await linkedinProvider.updatePost({
+          accessToken: mockToken,
+          postUrn: mockPostUrn,
+          commentary: 'Updated commentary text #update',
+        });
+
+        assert.strictEqual(res.success, true);
+        assert.strictEqual(res.commentary, 'Updated commentary text #update');
+      });
+
+      it('10. updatePost sends correct X-RestLi-Method: PARTIAL_UPDATE and protocol headers', async () => {
+        await linkedinProvider.updatePost({
+          accessToken: mockToken,
+          postUrn: mockPostUrn,
+          commentary: 'Header check update',
+        });
+
+        const updatePayload = getLastAxiosUpdatePost();
+        assert.strictEqual(updatePayload.headers['X-RestLi-Method'], 'PARTIAL_UPDATE');
+        assert.strictEqual(updatePayload.headers['Authorization'], `Bearer ${mockToken}`);
+        assert.strictEqual(updatePayload.headers['Linkedin-Version'], '202608');
+        assert.strictEqual(updatePayload.headers['X-Restli-Protocol-Version'], '2.0.0');
+      });
+
+      it('11. updatePost sends correct patch payload structure', async () => {
+        await linkedinProvider.updatePost({
+          accessToken: mockToken,
+          postUrn: mockPostUrn,
+          commentary: 'New patched commentary',
+        });
+
+        const updatePayload = getLastAxiosUpdatePost();
+        assert.deepStrictEqual(updatePayload.data, {
+          patch: {
+            $set: {
+              commentary: 'New patched commentary',
+            },
+          },
+        });
+      });
+
+      it('12. updatePost rejects empty commentary', async () => {
+        await assert.rejects(
+          async () => {
+            await linkedinProvider.updatePost({
+              accessToken: mockToken,
+              postUrn: mockPostUrn,
+              commentary: '   ',
+            });
+          },
+          (err) => {
+            assert.strictEqual(err.status, 400);
+            assert.ok(err.message.includes('cannot be empty'));
+            return true;
+          }
+        );
+      });
+
+      it('13. updatePost handles provider 400 Bad Request', async () => {
+        setMockUpdatePostError({ status: 400, errorCode: 'BAD_REQUEST', message: 'Malformed update' });
+
+        await assert.rejects(
+          async () => {
+            await linkedinProvider.updatePost({
+              accessToken: mockToken,
+              postUrn: mockPostUrn,
+              commentary: 'Test',
+            });
+          },
+          (err) => {
+            assert.strictEqual(err.status, 400);
+            return true;
+          }
+        );
+      });
+
+      it('14. updatePost handles provider 401 Unauthorized', async () => {
+        setMockUpdatePostError({ status: 401, errorCode: 'UNAUTHORIZED', message: 'Invalid token' });
+
+        await assert.rejects(
+          async () => {
+            await linkedinProvider.updatePost({
+              accessToken: mockToken,
+              postUrn: mockPostUrn,
+              commentary: 'Test',
+            });
+          },
+          (err) => {
+            assert.strictEqual(err.status, 401);
+            return true;
+          }
+        );
+      });
+
+      it('15. updatePost handles provider 403 Forbidden', async () => {
+        setMockUpdatePostError({ status: 403, errorCode: 'FORBIDDEN', message: 'No write permissions' });
+
+        await assert.rejects(
+          async () => {
+            await linkedinProvider.updatePost({
+              accessToken: mockToken,
+              postUrn: mockPostUrn,
+              commentary: 'Test',
+            });
+          },
+          (err) => {
+            assert.strictEqual(err.status, 403);
+            return true;
+          }
+        );
+      });
+
+      it('16. updatePost handles provider 429 Rate Limit', async () => {
+        setMockUpdatePostError({ status: 429, errorCode: 'RATE_LIMIT', message: 'Rate limit hit' });
+
+        await assert.rejects(
+          async () => {
+            await linkedinProvider.updatePost({
+              accessToken: mockToken,
+              postUrn: mockPostUrn,
+              commentary: 'Test',
+            });
+          },
+          (err) => {
+            assert.strictEqual(err.status, 429);
+            return true;
+          }
+        );
+      });
+
+      it('17. updatePost handles provider 5xx Server Error', async () => {
+        setMockUpdatePostError({ status: 503, errorCode: 'UNAVAILABLE', message: 'Service down' });
+
+        await assert.rejects(
+          async () => {
+            await linkedinProvider.updatePost({
+              accessToken: mockToken,
+              postUrn: mockPostUrn,
+              commentary: 'Test',
+            });
+          },
+          (err) => {
+            assert.strictEqual(err.status, 503);
+            return true;
+          }
+        );
+      });
+    });
+
+    describe('deletePost', () => {
+      it('18. deletePost successfully sends DELETE and returns success', async () => {
+        const res = await linkedinProvider.deletePost({
+          accessToken: mockToken,
+          postUrn: mockPostUrn,
+        });
+
+        assert.strictEqual(res.success, true);
+      });
+
+      it('19. deletePost sends correct X-RestLi-Method: DELETE and version headers', async () => {
+        await linkedinProvider.deletePost({
+          accessToken: mockToken,
+          postUrn: mockPostUrn,
+        });
+
+        const deletePayload = getLastAxiosDeletePost();
+        assert.strictEqual(deletePayload.headers['X-RestLi-Method'], 'DELETE');
+        assert.strictEqual(deletePayload.headers['Authorization'], `Bearer ${mockToken}`);
+        assert.strictEqual(deletePayload.headers['Linkedin-Version'], '202608');
+      });
+
+      it('20. deletePost handles 204 No Content safely', async () => {
+        const res = await linkedinProvider.deletePost({
+          accessToken: mockToken,
+          postUrn: mockPostUrn,
+        });
+        assert.strictEqual(res.success, true);
+      });
+
+      it('21. deletePost handles 404 as already deleted (idempotent)', async () => {
+        setMockDeletePostError({ status: 404, errorCode: 'NOT_FOUND', message: 'Already deleted' });
+
+        const res = await linkedinProvider.deletePost({
+          accessToken: mockToken,
+          postUrn: mockPostUrn,
+        });
+
+        assert.strictEqual(res.success, true);
+        assert.strictEqual(res.alreadyDeleted, true);
+      });
+
+      it('22. deletePost handles provider 401 Unauthorized', async () => {
+        setMockDeletePostError({ status: 401, errorCode: 'UNAUTHORIZED', message: 'Expired token' });
+
+        await assert.rejects(
+          async () => {
+            await linkedinProvider.deletePost({ accessToken: mockToken, postUrn: mockPostUrn });
+          },
+          (err) => {
+            assert.strictEqual(err.status, 401);
+            return true;
+          }
+        );
+      });
+
+      it('23. deletePost handles provider 403 Forbidden', async () => {
+        setMockDeletePostError({ status: 403, errorCode: 'FORBIDDEN', message: 'Permission denied' });
+
+        await assert.rejects(
+          async () => {
+            await linkedinProvider.deletePost({ accessToken: mockToken, postUrn: mockPostUrn });
+          },
+          (err) => {
+            assert.strictEqual(err.status, 403);
+            return true;
+          }
+        );
+      });
+
+      it('24. deletePost handles provider 429 Rate Limit', async () => {
+        setMockDeletePostError({ status: 429, errorCode: 'RATE_LIMIT', message: 'Throttle' });
+
+        await assert.rejects(
+          async () => {
+            await linkedinProvider.deletePost({ accessToken: mockToken, postUrn: mockPostUrn });
+          },
+          (err) => {
+            assert.strictEqual(err.status, 429);
+            return true;
+          }
+        );
+      });
+
+      it('25. deletePost handles provider 5xx Server Error', async () => {
+        setMockDeletePostError({ status: 500, errorCode: 'INTERNAL_ERROR', message: 'Server error' });
+
+        await assert.rejects(
+          async () => {
+            await linkedinProvider.deletePost({ accessToken: mockToken, postUrn: mockPostUrn });
+          },
+          (err) => {
+            assert.strictEqual(err.status, 500);
+            return true;
+          }
+        );
+      });
+    });
+  });
+
+  describe('7. GET /api/posts/:postId/publications/:publicationId Endpoint', () => {
+    it('Requires authentication (401 for unauthenticated request)', async () => {
+      const res = await request(app)
+        .get('/api/posts/507f1f77bcf86cd799439011/publications/507f1f77bcf86cd799439022')
+        .expect(401);
+
+      assert.strictEqual(res.body.success, false);
+    });
+
+    it('Enforces post ownership (404 when querying another user\'s post publication)', async () => {
+      const { user: userA } = await seedUser();
+      const { user: userB } = await seedUser();
+
+      const postB = seedPost(userB._id);
+      const accountB = seedSocialAccount(userB._id);
+      const pubB = seedPublication(postB._id, accountB._id);
+
+      const tokenA = generateTestToken(userA._id);
+
+      const res = await request(app)
+        .get(`/api/posts/${postB._id}/publications/${pubB._id}`)
+        .set('Authorization', `Bearer ${tokenA}`)
+        .expect(404);
+
+      assert.strictEqual(res.body.success, false);
+    });
+
+    it('Returns single publication details for authenticated user', async () => {
+      const { user } = await seedUser();
+      const post = seedPost(user._id);
+      const account = seedSocialAccount(user._id, { displayName: 'Alice LinkedIn' });
+      const pub = seedPublication(post._id, account._id, {
+        platformPostId: 'urn:li:share:112233',
+        status: 'published',
+      });
+
+      const token = generateTestToken(user._id);
+
+      const res = await request(app)
+        .get(`/api/posts/${post._id}/publications/${pub._id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+
+      assert.strictEqual(res.body.success, true);
+      assert.strictEqual(res.body.publication._id.toString(), pub._id.toString());
+      assert.strictEqual(res.body.publication.platformPostId, 'urn:li:share:112233');
+      assert.strictEqual(res.body.publication.socialAccount.displayName, 'Alice LinkedIn');
+    });
+  });
+
+  describe('8. POST /api/posts/:postId/publications/:publicationId/sync Endpoint', () => {
+    it('Requires authentication (401)', async () => {
+      await request(app)
+        .post('/api/posts/507f1f77bcf86cd799439011/publications/507f1f77bcf86cd799439022/sync')
+        .expect(401);
+    });
+
+    it('Enforces post and publication ownership (404 for unowned post)', async () => {
+      const { user: userA } = await seedUser();
+      const { user: userB } = await seedUser();
+
+      const postB = seedPost(userB._id);
+      const accountB = seedSocialAccount(userB._id);
+      const pubB = seedPublication(postB._id, accountB._id, { platformPostId: 'urn:li:share:999' });
+
+      const tokenA = generateTestToken(userA._id);
+
+      const res = await request(app)
+        .post(`/api/posts/${postB._id}/publications/${pubB._id}/sync`)
+        .set('Authorization', `Bearer ${tokenA}`)
+        .expect(404);
+
+      assert.strictEqual(res.body.success, false);
+    });
+
+    it('Successfully synchronizes status and metadata from LinkedIn', async () => {
+      const { user } = await seedUser();
+      const post = seedPost(user._id);
+      const account = seedSocialAccount(user._id);
+      const pub = seedPublication(post._id, account._id, {
+        platformPostId: 'urn:li:share:1234567890',
+        status: 'published',
+      });
+
+      setMockGetPostResult({
+        id: 'urn:li:share:1234567890',
+        lifecycleState: 'PUBLISHED',
+        visibility: 'PUBLIC',
+        commentary: 'Synced commentary',
+      });
+
+      const token = generateTestToken(user._id);
+
+      const res = await request(app)
+        .post(`/api/posts/${post._id}/publications/${pub._id}/sync`)
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+
+      assert.strictEqual(res.body.success, true);
+      assert.strictEqual(res.body.publication.status, 'published');
+      assert.ok(res.body.publication.providerMetadata?.lastSyncedAt);
+
+      const updated = await Publication.findOne({ _id: pub._id });
+      assert.strictEqual(updated.status, 'published');
+      assert.ok(updated.providerMetadata?.lastSyncedAt);
+    });
+
+    it('Handles 404 from LinkedIn by marking publication as deleted safely without destroying document', async () => {
+      const { user } = await seedUser();
+      const post = seedPost(user._id);
+      const account = seedSocialAccount(user._id);
+      const pub = seedPublication(post._id, account._id, {
+        platformPostId: 'urn:li:share:deleted_on_linkedin',
+        status: 'published',
+      });
+
+      setMockGetPostError({ status: 404, message: 'Post not found on LinkedIn' });
+
+      const token = generateTestToken(user._id);
+
+      const res = await request(app)
+        .post(`/api/posts/${post._id}/publications/${pub._id}/sync`)
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+
+      assert.strictEqual(res.body.success, true);
+      assert.strictEqual(res.body.publication.status, 'deleted');
+
+      const savedPub = await Publication.findOne({ _id: pub._id });
+      assert.ok(savedPub, 'Publication document must still exist');
+      assert.strictEqual(savedPub.status, 'deleted');
+      assert.ok(savedPub.deletedAt);
+    });
+
+    it('Masks raw provider errors and returns safe status without leaking sensitive details', async () => {
+      const { user } = await seedUser();
+      const post = seedPost(user._id);
+      const account = seedSocialAccount(user._id);
+      const pub = seedPublication(post._id, account._id, {
+        platformPostId: 'urn:li:share:error_sync',
+        status: 'published',
+      });
+
+      setMockGetPostError({
+        status: 403,
+        errorCode: 'ACCESS_DENIED',
+        message: 'Member credentials revoked on LinkedIn',
+      });
+
+      const token = generateTestToken(user._id);
+
+      const res = await request(app)
+        .post(`/api/posts/${post._id}/publications/${pub._id}/sync`)
+        .set('Authorization', `Bearer ${token}`)
+        .expect(403);
+
+      assert.strictEqual(res.body.success, false);
+      assert.strictEqual(res.body.errorCode, 'ACCESS_DENIED');
+    });
+  });
+
+  describe('9. PATCH /api/posts/:postId/publications/:publicationId Endpoint (Commentary Update)', () => {
+    it('Requires authentication (401)', async () => {
+      await request(app)
+        .patch('/api/posts/507f1f77bcf86cd799439011/publications/507f1f77bcf86cd799439022')
+        .send({ commentary: 'Updated text' })
+        .expect(401);
+    });
+
+    it('Rejects empty or whitespace-only commentary with 400', async () => {
+      const { user } = await seedUser();
+      const post = seedPost(user._id);
+      const account = seedSocialAccount(user._id);
+      const pub = seedPublication(post._id, account._id, {
+        platformPostId: 'urn:li:share:123',
+        status: 'published',
+      });
+
+      const token = generateTestToken(user._id);
+
+      const res = await request(app)
+        .patch(`/api/posts/${post._id}/publications/${pub._id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ commentary: '   ' })
+        .expect(400);
+
+      assert.strictEqual(res.body.success, false);
+      assert.ok(res.body.message.includes('cannot be empty'));
+    });
+
+    it('Rejects commentary exceeding maximum allowable length (3000 chars) with 400', async () => {
+      const { user } = await seedUser();
+      const post = seedPost(user._id);
+      const account = seedSocialAccount(user._id);
+      const pub = seedPublication(post._id, account._id, {
+        platformPostId: 'urn:li:share:123',
+        status: 'published',
+      });
+
+      const token = generateTestToken(user._id);
+
+      const res = await request(app)
+        .patch(`/api/posts/${post._id}/publications/${pub._id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ commentary: 'A'.repeat(3001) })
+        .expect(400);
+
+      assert.strictEqual(res.body.success, false);
+      assert.ok(res.body.message.includes('maximum allowable length'));
+    });
+
+    it('Enforces ownership checks (404 for unowned post or publication)', async () => {
+      const { user: userA } = await seedUser();
+      const { user: userB } = await seedUser();
+
+      const postB = seedPost(userB._id);
+      const accountB = seedSocialAccount(userB._id);
+      const pubB = seedPublication(postB._id, accountB._id, {
+        platformPostId: 'urn:li:share:123',
+        status: 'published',
+      });
+
+      const tokenA = generateTestToken(userA._id);
+
+      const res = await request(app)
+        .patch(`/api/posts/${postB._id}/publications/${pubB._id}`)
+        .set('Authorization', `Bearer ${tokenA}`)
+        .send({ commentary: 'Hacked caption' })
+        .expect(404);
+
+      assert.strictEqual(res.body.success, false);
+    });
+
+    it('Rejects updating a deleted or failed publication with 400', async () => {
+      const { user } = await seedUser();
+      const post = seedPost(user._id);
+      const account = seedSocialAccount(user._id);
+      const deletedPub = seedPublication(post._id, account._id, {
+        platformPostId: 'urn:li:share:123',
+        status: 'deleted',
+      });
+
+      const token = generateTestToken(user._id);
+
+      const res = await request(app)
+        .patch(`/api/posts/${post._id}/publications/${deletedPub._id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ commentary: 'Trying to update deleted post' })
+        .expect(400);
+
+      assert.strictEqual(res.body.success, false);
+      assert.ok(res.body.message.includes('Only published posts can be updated'));
+    });
+
+    it('Successful update modifies local post caption and updates publication metadata', async () => {
+      const { user } = await seedUser();
+      const post = seedPost(user._id, { caption: 'Original caption' });
+      const account = seedSocialAccount(user._id);
+      const pub = seedPublication(post._id, account._id, {
+        platformPostId: 'urn:li:share:1234567890',
+        status: 'published',
+      });
+
+      const token = generateTestToken(user._id);
+
+      const res = await request(app)
+        .patch(`/api/posts/${post._id}/publications/${pub._id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ commentary: 'Brand new updated commentary!' })
+        .expect(200);
+
+      assert.strictEqual(res.body.success, true);
+      assert.strictEqual(res.body.post.caption, 'Brand new updated commentary!');
+
+      // Check database
+      const savedPost = await postModel.findOne({ _id: post._id });
+      assert.strictEqual(savedPost.caption, 'Brand new updated commentary!');
+
+      const savedPub = await Publication.findOne({ _id: pub._id });
+      assert.ok(savedPub.providerMetadata?.lastModifiedAt);
+    });
+
+    it('Failed update does NOT modify local post caption', async () => {
+      const { user } = await seedUser();
+      const post = seedPost(user._id, { caption: 'Original untouched caption' });
+      const account = seedSocialAccount(user._id);
+      const pub = seedPublication(post._id, account._id, {
+        platformPostId: 'urn:li:share:1234567890',
+        status: 'published',
+      });
+
+      setMockUpdatePostError({ status: 500, message: 'LinkedIn API error during update' });
+
+      const token = generateTestToken(user._id);
+
+      const res = await request(app)
+        .patch(`/api/posts/${post._id}/publications/${pub._id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ commentary: 'Attempted update that should fail' })
+        .expect(500);
+
+      assert.strictEqual(res.body.success, false);
+
+      // Verify local database state is unmodified
+      const savedPost = await postModel.findOne({ _id: post._id });
+      assert.strictEqual(savedPost.caption, 'Original untouched caption');
+    });
+  });
+
+  describe('10. DELETE /api/posts/:postId/publications/:publicationId Endpoint', () => {
+    it('Requires authentication (401)', async () => {
+      await request(app)
+        .delete('/api/posts/507f1f77bcf86cd799439011/publications/507f1f77bcf86cd799439022')
+        .expect(401);
+    });
+
+    it('Enforces ownership checks (404 for unowned post or publication)', async () => {
+      const { user: userA } = await seedUser();
+      const { user: userB } = await seedUser();
+
+      const postB = seedPost(userB._id);
+      const accountB = seedSocialAccount(userB._id);
+      const pubB = seedPublication(postB._id, accountB._id, { platformPostId: 'urn:li:share:123' });
+
+      const tokenA = generateTestToken(userA._id);
+
+      const res = await request(app)
+        .delete(`/api/posts/${postB._id}/publications/${pubB._id}`)
+        .set('Authorization', `Bearer ${tokenA}`)
+        .expect(404);
+
+      assert.strictEqual(res.body.success, false);
+    });
+
+    it('Successfully marks Publication status as deleted and sets deletedAt without physically deleting document', async () => {
+      const { user } = await seedUser();
+      const post = seedPost(user._id);
+      const account = seedSocialAccount(user._id);
+      const pub = seedPublication(post._id, account._id, {
+        platformPostId: 'urn:li:share:1234567890',
+        status: 'published',
+      });
+
+      const token = generateTestToken(user._id);
+
+      const res = await request(app)
+        .delete(`/api/posts/${post._id}/publications/${pub._id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+
+      assert.strictEqual(res.body.success, true);
+      assert.strictEqual(res.body.publication.status, 'deleted');
+
+      // Verify document still exists in database with status 'deleted'
+      const savedPub = await Publication.findOne({ _id: pub._id });
+      assert.ok(savedPub, 'Publication document must be preserved in MongoDB');
+      assert.strictEqual(savedPub.status, 'deleted');
+      assert.ok(savedPub.deletedAt);
+    });
+
+    it('Repeated deletion is idempotent and succeeds without throwing error', async () => {
+      const { user } = await seedUser();
+      const post = seedPost(user._id);
+      const account = seedSocialAccount(user._id);
+      const pub = seedPublication(post._id, account._id, {
+        platformPostId: 'urn:li:share:1234567890',
+        status: 'deleted',
+        deletedAt: new Date(),
+      });
+
+      const token = generateTestToken(user._id);
+
+      const res = await request(app)
+        .delete(`/api/posts/${post._id}/publications/${pub._id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+
+      assert.strictEqual(res.body.success, true);
+      assert.ok(res.body.message.includes('already deleted'));
+    });
+
+    it('Handles provider delete failure gracefully with safe error response', async () => {
+      const { user } = await seedUser();
+      const post = seedPost(user._id);
+      const account = seedSocialAccount(user._id);
+      const pub = seedPublication(post._id, account._id, {
+        platformPostId: 'urn:li:share:fail_delete',
+        status: 'published',
+      });
+
+      setMockDeletePostError({ status: 403, errorCode: 'FORBIDDEN', message: 'Insufficient scope to delete' });
+
+      const token = generateTestToken(user._id);
+
+      const res = await request(app)
+        .delete(`/api/posts/${post._id}/publications/${pub._id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .expect(403);
+
+      assert.strictEqual(res.body.success, false);
+      assert.strictEqual(res.body.errorCode, 'FORBIDDEN');
     });
   });
 });

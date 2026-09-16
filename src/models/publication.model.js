@@ -26,12 +26,15 @@ const publicationSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['publishing', 'published', 'failed'],
+      enum: ['publishing', 'published', 'failed', 'deleted'],
       default: 'publishing',
       required: true,
       index: true,
     },
     publishedAt: {
+      type: Date,
+    },
+    deletedAt: {
       type: Date,
     },
     errorCode: {

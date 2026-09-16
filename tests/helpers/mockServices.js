@@ -36,6 +36,23 @@ let mockPublishPostResult = {
   platformPostId: 'urn:li:share:1234567890',
 };
 
+let mockGetPostResult = {
+  id: 'urn:li:share:1234567890',
+  author: 'urn:li:person:linkedin_member_sub_98765',
+  commentary: 'Original post commentary #linkedin',
+  lifecycleState: 'PUBLISHED',
+  visibility: 'PUBLIC',
+  publishedAt: 1710000000000,
+  createdAt: 1710000000000,
+  lastModifiedAt: 1710000000000,
+  content: {
+    media: {
+      id: 'urn:li:image:MOCK_IMAGE_URN_12345',
+      altText: 'Sample image',
+    },
+  },
+};
+
 let mockImageFetchBuffer = Buffer.from('mock-valid-jpeg-image-binary-bytes');
 let mockImageFetchContentType = 'image/jpeg';
 let mockImageFetchError = null;
@@ -45,12 +62,18 @@ let lastAxiosPostsPayload = null;
 let lastAxiosInitializeUpload = null;
 let lastAxiosPutPayload = null;
 let lastAxiosImageFetch = null;
+let lastAxiosGetPost = null;
+let lastAxiosUpdatePost = null;
+let lastAxiosDeletePost = null;
 
 let publishErrorToThrow = null;
 let shouldMissingPostId = false;
 let mockImageInitError = null;
 let mockImageInitMissingValues = false;
 let mockUploadError = null;
+let mockGetPostError = null;
+let mockUpdatePostError = null;
+let mockDeletePostError = null;
 
 let shouldAiFail = false;
 let shouldStorageFail = false;
@@ -84,6 +107,7 @@ function setupServiceMocks() {
 
   // Intercept axios.get
   axios.get = async function (url, options = {}) {
+    // 1. LinkedIn Profile Userinfo
     if (typeof url === 'string' && url.includes('api.linkedin.com/v2/userinfo')) {
       if (shouldLinkedInProfileFail) {
         const err = new Error('Unauthorized token or LinkedIn profile service unavailable');
@@ -91,6 +115,29 @@ function setupServiceMocks() {
         throw err;
       }
       return { status: 200, data: mockLinkedInProfileResult };
+    }
+
+    // 2. LinkedIn Posts GET API (/rest/posts/{postUrn})
+    if (typeof url === 'string' && url.includes('rest/posts/')) {
+      lastAxiosGetPost = { url, headers: options.headers };
+
+      if (mockGetPostError) {
+        const err = new Error(mockGetPostError.message || 'LinkedIn Posts GET API error');
+        err.response = {
+          status: mockGetPostError.status || 502,
+          data: {
+            serviceErrorCode: mockGetPostError.errorCode || 'LINKEDIN_ERROR',
+            message: mockGetPostError.message || 'Failed to fetch post',
+          },
+        };
+        throw err;
+      }
+
+      return {
+        status: 200,
+        headers: { 'linkedin-version': '202608', 'x-restli-protocol-version': '2.0.0' },
+        data: mockGetPostResult,
+      };
     }
 
     // Default: treat as image download request (ImageKit or other media CDN)
@@ -195,7 +242,31 @@ function setupServiceMocks() {
       };
     }
 
-    // 3. LinkedIn Posts API
+    // 3. LinkedIn Posts Update API (POST with X-RestLi-Method: PARTIAL_UPDATE)
+    if (
+      typeof url === 'string' &&
+      url.includes('rest/posts/') &&
+      (options.headers?.['X-RestLi-Method'] === 'PARTIAL_UPDATE' ||
+        options.headers?.['x-restli-method'] === 'PARTIAL_UPDATE')
+    ) {
+      lastAxiosUpdatePost = { url, data, headers: options.headers };
+
+      if (mockUpdatePostError) {
+        const err = new Error(mockUpdatePostError.message || 'LinkedIn Post Update failed');
+        err.response = {
+          status: mockUpdatePostError.status || 502,
+          data: {
+            serviceErrorCode: mockUpdatePostError.errorCode || 'UPDATE_ERROR',
+            message: mockUpdatePostError.message || 'Update failed',
+          },
+        };
+        throw err;
+      }
+
+      return { status: 204, headers: {}, data: {} };
+    }
+
+    // 4. LinkedIn Posts Create API
     if (typeof url === 'string' && url.includes('rest/posts')) {
       lastAxiosPostsPayload = { url, data, headers: options.headers };
 
@@ -246,6 +317,29 @@ function setupServiceMocks() {
 
     return { status: 201, data: {} };
   };
+
+  // Intercept axios.delete (LinkedIn Posts DELETE API)
+  axios.delete = async function (url, options = {}) {
+    if (typeof url === 'string' && url.includes('rest/posts/')) {
+      lastAxiosDeletePost = { url, headers: options.headers };
+
+      if (mockDeletePostError) {
+        const err = new Error(mockDeletePostError.message || 'LinkedIn Post Delete failed');
+        err.response = {
+          status: mockDeletePostError.status || 502,
+          data: {
+            serviceErrorCode: mockDeletePostError.errorCode || 'DELETE_ERROR',
+            message: mockDeletePostError.message || 'Deletion failed',
+          },
+        };
+        throw err;
+      }
+
+      return { status: 204, headers: {}, data: {} };
+    }
+
+    return { status: 200, data: {} };
+  };
 }
 
 function resetServiceMocks() {
@@ -275,6 +369,23 @@ function resetServiceMocks() {
   mockPublishPostResult = {
     platformPostId: 'urn:li:share:1234567890',
   };
+  mockGetPostResult = {
+    id: 'urn:li:share:1234567890',
+    author: 'urn:li:person:linkedin_member_sub_98765',
+    commentary: 'Original post commentary #linkedin',
+    lifecycleState: 'PUBLISHED',
+    visibility: 'PUBLIC',
+    publishedAt: 1710000000000,
+    createdAt: 1710000000000,
+    lastModifiedAt: 1710000000000,
+    content: {
+      media: {
+        id: 'urn:li:image:MOCK_IMAGE_URN_12345',
+        altText: 'Sample image',
+      },
+    },
+  };
+
   mockImageFetchBuffer = Buffer.from('mock-valid-jpeg-image-binary-bytes');
   mockImageFetchContentType = 'image/jpeg';
   mockImageFetchError = null;
@@ -284,12 +395,18 @@ function resetServiceMocks() {
   lastAxiosInitializeUpload = null;
   lastAxiosPutPayload = null;
   lastAxiosImageFetch = null;
+  lastAxiosGetPost = null;
+  lastAxiosUpdatePost = null;
+  lastAxiosDeletePost = null;
 
   publishErrorToThrow = null;
   shouldMissingPostId = false;
   mockImageInitError = null;
   mockImageInitMissingValues = false;
   mockUploadError = null;
+  mockGetPostError = null;
+  mockUpdatePostError = null;
+  mockDeletePostError = null;
 
   shouldAiFail = false;
   shouldStorageFail = false;
@@ -358,6 +475,25 @@ function setMockRedirectDestination(url) {
   mockRedirectDestination = url;
 }
 
+function setMockGetPostResult(data) {
+  mockGetPostResult = {
+    ...mockGetPostResult,
+    ...data,
+  };
+}
+
+function setMockGetPostError(errorObj) {
+  mockGetPostError = errorObj;
+}
+
+function setMockUpdatePostError(errorObj) {
+  mockUpdatePostError = errorObj;
+}
+
+function setMockDeletePostError(errorObj) {
+  mockDeletePostError = errorObj;
+}
+
 function getLastAxiosPostsPayload() {
   return lastAxiosPostsPayload;
 }
@@ -372,6 +508,18 @@ function getLastAxiosPutPayload() {
 
 function getLastAxiosImageFetch() {
   return lastAxiosImageFetch;
+}
+
+function getLastAxiosGetPost() {
+  return lastAxiosGetPost;
+}
+
+function getLastAxiosUpdatePost() {
+  return lastAxiosUpdatePost;
+}
+
+function getLastAxiosDeletePost() {
+  return lastAxiosDeletePost;
 }
 
 module.exports = {
@@ -391,8 +539,15 @@ module.exports = {
   setMockImageFetchContentType,
   setMockImageFetchBuffer,
   setMockRedirectDestination,
+  setMockGetPostResult,
+  setMockGetPostError,
+  setMockUpdatePostError,
+  setMockDeletePostError,
   getLastAxiosPostsPayload,
   getLastAxiosInitializeUpload,
   getLastAxiosPutPayload,
   getLastAxiosImageFetch,
+  getLastAxiosGetPost,
+  getLastAxiosUpdatePost,
+  getLastAxiosDeletePost,
 };

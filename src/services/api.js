@@ -124,6 +124,24 @@ export const postService = {
     const response = await api.get(`/posts/${postId}/publications`);
     return response.data;
   },
+  getPublication: async (postId, publicationId) => {
+    const response = await api.get(`/posts/${postId}/publications/${publicationId}`);
+    return response.data;
+  },
+  syncPublication: async (postId, publicationId) => {
+    const response = await api.post(`/posts/${postId}/publications/${publicationId}/sync`);
+    return response.data;
+  },
+  updatePublicationCommentary: async (postId, publicationId, commentary) => {
+    const response = await api.patch(`/posts/${postId}/publications/${publicationId}`, {
+      commentary,
+    });
+    return response.data;
+  },
+  deletePublication: async (postId, publicationId) => {
+    const response = await api.delete(`/posts/${postId}/publications/${publicationId}`);
+    return response.data;
+  },
 };
 
 export const socialService = {

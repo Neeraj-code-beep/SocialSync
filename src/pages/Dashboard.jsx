@@ -15,6 +15,10 @@ import {
   ExternalLink,
   ShieldCheck,
   CheckCircle2,
+  Trash2,
+  Edit3,
+  X,
+  RotateCcw,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { captionService, socialService, postService } from '../services/api';
@@ -42,7 +46,14 @@ const Dashboard = () => {
 
   // Publishing State Management
   const [publishingPostId, setPublishingPostId] = useState(null);
-  const [publishedPosts, setPublishedPosts] = useState({}); // { [postId]: { platformPostId, publishedAt } }
+  const [publicationsMap, setPublicationsMap] = useState({}); // { [postId]: Publication[] }
+  const [syncingPubId, setSyncingPubId] = useState(null);
+  const [deletingPubId, setDeletingPubId] = useState(null);
+
+  // Edit Commentary Modal State
+  const [editingModal, setEditingModal] = useState(null); // { postId, publicationId, commentary, isSaving }
+  // Delete Confirmation Modal State
+  const [confirmDeleteModal, setConfirmDeleteModal] = useState(null); // { postId, publicationId, postTitle }
 
   // Persistent Post History States
   const [posts, setPosts] = useState([]);
@@ -72,16 +83,43 @@ const Dashboard = () => {
     }
   }, []);
 
+  const loadPublicationsForPosts = useCallback(async (postList) => {
+    if (!postList || postList.length === 0) return;
+    try {
+      const entries = await Promise.all(
+        postList.map(async (p) => {
+          try {
+            const res = await postService.getPublications(p._id);
+            return [p._id, res.publications || []];
+          } catch {
+            return [p._id, []];
+          }
+        })
+      );
+      setPublicationsMap((prev) => {
+        const next = { ...prev };
+        entries.forEach(([postId, pubs]) => {
+          next[postId] = pubs;
+        });
+        return next;
+      });
+    } catch (err) {
+      console.error('Failed to fetch publications for posts:', err);
+    }
+  }, []);
+
   const fetchPosts = useCallback(async (page = 1) => {
     setIsLoadingPosts(true);
     setPostsError(null);
     try {
       const res = await captionService.getPosts(page, 9);
       if (res.success) {
-        setPosts(res.posts || []);
+        const loadedPosts = res.posts || [];
+        setPosts(loadedPosts);
         if (res.pagination) {
           setPagination(res.pagination);
         }
+        loadPublicationsForPosts(loadedPosts);
       }
     } catch (error) {
       console.error('Failed to fetch user posts:', error);
@@ -89,7 +127,7 @@ const Dashboard = () => {
     } finally {
       setIsLoadingPosts(false);
     }
-  }, []);
+  }, [loadPublicationsForPosts]);
 
   // Handle OAuth redirect query parameters (success / failure feedback)
   useEffect(() => {
@@ -197,24 +235,24 @@ const Dashboard = () => {
       const res = await postService.publishToLinkedIn(postId, linkedinAccount._id);
       if (res.success) {
         toast.success('Post published to LinkedIn successfully!');
-        setPublishedPosts((prev) => ({
-          ...prev,
-          [postId]: {
-            platformPostId: res.publication?.platformPostId,
-            publishedAt: res.publication?.publishedAt || new Date().toISOString(),
-          },
-        }));
+        // Update publication map
+        if (res.publication) {
+          setPublicationsMap((prev) => ({
+            ...prev,
+            [postId]: [res.publication, ...(prev[postId] || []).filter((p) => p._id !== res.publication._id)],
+          }));
+        }
       }
     } catch (err) {
       console.error('LinkedIn publishing error:', err);
       if (err.response?.status === 409) {
         toast('Post is already published to LinkedIn.', { icon: 'ℹ️' });
-        setPublishedPosts((prev) => ({
-          ...prev,
-          [postId]: {
-            publishedAt: new Date().toISOString(),
-          },
-        }));
+        if (err.response.data?.publication) {
+          setPublicationsMap((prev) => ({
+            ...prev,
+            [postId]: [err.response.data.publication, ...(prev[postId] || [])],
+          }));
+        }
       } else {
         const msg =
           err.response?.data?.message || err.message || 'Failed to publish post to LinkedIn.';
@@ -222,6 +260,100 @@ const Dashboard = () => {
       }
     } finally {
       setPublishingPostId(null);
+    }
+  };
+
+  const handleSyncPublication = async (postId, publicationId) => {
+    if (!postId || !publicationId) return;
+    setSyncingPubId(publicationId);
+    try {
+      const res = await postService.syncPublication(postId, publicationId);
+      if (res.success && res.publication) {
+        toast.success(res.message || 'Publication synced with LinkedIn!');
+        setPublicationsMap((prev) => ({
+          ...prev,
+          [postId]: (prev[postId] || []).map((pub) =>
+            pub._id === publicationId ? { ...pub, ...res.publication } : pub
+          ),
+        }));
+      }
+    } catch (err) {
+      console.error('Sync publication error:', err);
+      const msg = err.response?.data?.message || 'Failed to synchronize with LinkedIn.';
+      toast.error(msg);
+    } finally {
+      setSyncingPubId(null);
+    }
+  };
+
+  const handleOpenEditModal = (postId, publication, currentCaption) => {
+    setEditingModal({
+      postId,
+      publicationId: publication._id,
+      commentary: currentCaption || '',
+      isSaving: false,
+    });
+  };
+
+  const handleSaveCommentary = async () => {
+    if (!editingModal) return;
+    const { postId, publicationId, commentary } = editingModal;
+    if (!commentary || !commentary.trim()) {
+      toast.error('Commentary cannot be empty.');
+      return;
+    }
+
+    setEditingModal((prev) => ({ ...prev, isSaving: true }));
+    try {
+      const res = await postService.updatePublicationCommentary(postId, publicationId, commentary.trim());
+      if (res.success) {
+        toast.success('LinkedIn commentary updated successfully!');
+        // Update local post state
+        setPosts((prev) =>
+          prev.map((p) => (p._id === postId ? { ...p, caption: commentary.trim() } : p))
+        );
+        // Update publications map
+        if (res.publication) {
+          setPublicationsMap((prev) => ({
+            ...prev,
+            [postId]: (prev[postId] || []).map((pub) =>
+              pub._id === publicationId ? { ...pub, ...res.publication } : pub
+            ),
+          }));
+        }
+        setEditingModal(null);
+      }
+    } catch (err) {
+      console.error('Update commentary error:', err);
+      const msg = err.response?.data?.message || 'Failed to update commentary on LinkedIn.';
+      toast.error(msg);
+      setEditingModal((prev) => ({ ...prev, isSaving: false }));
+    }
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!confirmDeleteModal) return;
+    const { postId, publicationId } = confirmDeleteModal;
+
+    setDeletingPubId(publicationId);
+    try {
+      const res = await postService.deletePublication(postId, publicationId);
+      if (res.success) {
+        toast.success('Publication deleted from LinkedIn.');
+        setPublicationsMap((prev) => ({
+          ...prev,
+          [postId]: (prev[postId] || []).map((pub) =>
+            pub._id === publicationId ? { ...pub, status: 'deleted', deletedAt: new Date() } : pub
+          ),
+        }));
+      }
+    } catch (err) {
+      console.error('Delete publication error:', err);
+      const msg = err.response?.data?.message || 'Failed to delete publication from LinkedIn.';
+      toast.error(msg);
+    } finally {
+      setDeletingPubId(null);
+      setConfirmDeleteModal(null);
     }
   };
 
@@ -233,11 +365,120 @@ const Dashboard = () => {
     setTimeout(() => setCopiedPostId(null), 2000);
   };
 
+  const getLinkedInPostUrl = (platformPostId) => {
+    if (!platformPostId || typeof platformPostId !== 'string') return null;
+    return `https://www.linkedin.com/feed/update/${encodeURIComponent(platformPostId)}`;
+  };
+
   return (
     <div className="min-h-screen flex flex-col pt-20 bg-[#FBFAF7] text-[#171717]">
       <Navbar />
 
       {isGenerating && <LoadingOverlay text="Analyzing photo & writing caption..." />}
+
+      {/* Edit Commentary Modal */}
+      <AnimatePresence>
+        {editingModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-2xl p-6 max-w-lg w-full shadow-xl border border-[#E7E4DE] space-y-4"
+            >
+              <div className="flex items-center justify-between border-b border-[#E7E4DE] pb-3">
+                <div className="flex items-center gap-2">
+                  <Edit3 className="w-4 h-4 text-[#0077B5]" />
+                  <h3 className="text-sm font-semibold text-[#171717]">Edit LinkedIn Commentary</h3>
+                </div>
+                <button
+                  onClick={() => setEditingModal(null)}
+                  className="p-1 rounded-lg hover:bg-[#F4F2ED] text-[#66645F] transition-colors cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="space-y-2">
+                <textarea
+                  value={editingModal.commentary}
+                  onChange={(e) =>
+                    setEditingModal((prev) => ({ ...prev, commentary: e.target.value }))
+                  }
+                  rows={5}
+                  maxLength={3000}
+                  className="w-full text-xs font-sans leading-relaxed p-3 rounded-xl border border-[#E7E4DE] focus:border-[#171717] focus:ring-1 focus:ring-[#171717] outline-hidden bg-[#FBFAF7] resize-none"
+                  placeholder="Enter updated post commentary..."
+                />
+                <div className="flex justify-between text-[11px] text-[#66645F]">
+                  <span>LinkedIn Posts REST API (Partial Update)</span>
+                  <span>{editingModal.commentary.length} / 3000</span>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-[#E7E4DE]">
+                <button
+                  onClick={() => setEditingModal(null)}
+                  disabled={editingModal.isSaving}
+                  className="px-3.5 py-1.5 rounded-xl border border-[#E7E4DE] text-xs font-semibold hover:bg-[#F4F2ED] transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSaveCommentary}
+                  disabled={editingModal.isSaving || !editingModal.commentary.trim()}
+                  className="px-4 py-1.5 rounded-xl bg-[#0077B5] hover:bg-[#006097] text-white text-xs font-semibold transition-colors cursor-pointer disabled:opacity-50 shadow-2xs"
+                >
+                  {editingModal.isSaving ? 'Saving to LinkedIn...' : 'Save commentary'}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Delete Confirmation Modal */}
+      <AnimatePresence>
+        {confirmDeleteModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-2xl p-6 max-w-md w-full shadow-xl border border-[#E7E4DE] space-y-4"
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-rose-50 border border-rose-100 flex items-center justify-center text-rose-600 flex-shrink-0">
+                  <Trash2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-semibold text-[#171717]">Delete from LinkedIn?</h3>
+                  <p className="text-xs text-[#66645F] mt-0.5">
+                    This will delete the publication from your LinkedIn profile. Your local draft history will remain intact.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-[#E7E4DE]">
+                <button
+                  onClick={() => setConfirmDeleteModal(null)}
+                  disabled={deletingPubId === confirmDeleteModal.publicationId}
+                  className="px-3.5 py-1.5 rounded-xl border border-[#E7E4DE] text-xs font-semibold hover:bg-[#F4F2ED] transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleConfirmDelete}
+                  disabled={deletingPubId === confirmDeleteModal.publicationId}
+                  className="px-4 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold transition-colors cursor-pointer disabled:opacity-50 shadow-2xs"
+                >
+                  {deletingPubId === confirmDeleteModal.publicationId ? 'Deleting...' : 'Confirm Delete'}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       <main className="flex-1 max-w-7xl mx-auto px-4 sm:px-6 w-full py-8">
         {/* Workspace Title Header */}
@@ -251,7 +492,7 @@ const Dashboard = () => {
               Give your photo the right words
             </h1>
             <p className="text-sm text-[#66645F] mt-1">
-              Upload an image to generate engagement-focused captions and connect your social accounts.
+              Upload an image to generate engagement-focused captions and manage your LinkedIn publications.
             </p>
           </div>
 
@@ -352,13 +593,18 @@ const Dashboard = () => {
                   </span>
                   {generatedCaption && (
                     <div className="flex items-center gap-2">
-                      {currentPostId && (
-                        publishedPosts[currentPostId] ? (
-                          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                            <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                            <span>Published to LinkedIn</span>
-                          </span>
-                        ) : (
+                      {currentPostId && (() => {
+                        const postPubs = publicationsMap[currentPostId] || [];
+                        const activePub = postPubs.find((p) => p.status === 'published');
+                        if (activePub) {
+                          return (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                              <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                              <span>Published to LinkedIn</span>
+                            </span>
+                          );
+                        }
+                        return (
                           <button
                             onClick={() => handlePublishToLinkedIn(currentPostId)}
                             disabled={publishingPostId === currentPostId}
@@ -369,8 +615,8 @@ const Dashboard = () => {
                               {publishingPostId === currentPostId ? 'Publishing image...' : 'Publish to LinkedIn'}
                             </span>
                           </button>
-                        )
-                      )}
+                        );
+                      })()}
                       <span className="text-xs font-semibold text-[#171717] bg-[#C8F135] px-2.5 py-1 rounded-full">
                         Ready to post
                       </span>
@@ -414,13 +660,13 @@ const Dashboard = () => {
             <div>
               <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-[#66645F] mb-1">
                 <History className="w-3.5 h-3.5 text-[#8A8882]" />
-                <span>SAVED HISTORY</span>
+                <span>SAVED HISTORY & PUBLICATIONS</span>
               </div>
-              <h2 className="text-xl font-semibold text-[#171717]">Previous Captions & Posts</h2>
+              <h2 className="text-xl font-semibold text-[#171717]">Previous Captions & LinkedIn Posts</h2>
               <p className="text-xs text-[#66645F] mt-0.5">
                 {pagination.totalPosts > 0
                   ? `Showing ${posts.length} of ${pagination.totalPosts} saved post${pagination.totalPosts === 1 ? '' : 's'}`
-                  : 'All your previously generated captions are persistently stored in your account'}
+                  : 'All your previously generated captions and publications are persistently stored in your account'}
               </p>
             </div>
 
@@ -497,84 +743,194 @@ const Dashboard = () => {
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {posts.map((post) => (
-                <GlassCard
-                  key={post._id}
-                  hover={false}
-                  className="bg-white border-[#E7E4DE] shadow-2xs p-5 flex flex-col justify-between"
-                >
-                  <div className="flex gap-4 items-start">
-                    {post.image ? (
-                      <img
-                        src={post.image}
-                        alt="Post thumbnail"
-                        className="w-20 h-20 rounded-xl object-cover border border-[#E7E4DE] bg-[#F4F2ED] flex-shrink-0"
-                        loading="lazy"
-                      />
-                    ) : (
-                      <div className="w-20 h-20 rounded-xl bg-[#F4F2ED] border border-[#E7E4DE] flex items-center justify-center flex-shrink-0">
-                        <ImageIcon className="w-6 h-6 text-[#8A8882]" />
-                      </div>
-                    )}
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs text-[#171717] font-sans leading-relaxed line-clamp-4 whitespace-pre-wrap">
-                        {post.caption}
-                      </p>
-                    </div>
-                  </div>
+              {posts.map((post) => {
+                const postPubs = publicationsMap[post._id] || [];
+                const latestPub = postPubs[0] || null;
 
-                  <div className="flex items-center justify-between border-t border-[#E7E4DE] pt-3 mt-4 text-[11px] text-[#66645F]">
-                    <span>
-                      {post.createdAt
-                        ? new Date(post.createdAt).toLocaleDateString(undefined, {
-                            month: 'short',
-                            day: 'numeric',
-                            year: 'numeric',
-                          })
-                        : 'Recent'}
-                    </span>
-
-                    <div className="flex items-center gap-2">
-                      {publishedPosts[post._id] ? (
-                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-1 rounded-md border border-emerald-200">
-                          <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                          <span>Published</span>
-                        </span>
-                      ) : (
-                        <button
-                          onClick={() => handlePublishToLinkedIn(post._id)}
-                          disabled={publishingPostId === post._id}
-                          className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#0077B5] hover:bg-[#006097] text-white text-xs font-semibold shadow-2xs transition-all cursor-pointer disabled:opacity-50"
-                          title="Publish to LinkedIn"
-                        >
-                          <Linkedin className="w-3 h-3 fill-current" />
-                          <span>
-                            {publishingPostId === post._id ? 'Publishing...' : 'Publish'}
-                          </span>
-                        </button>
-                      )}
-
-                      <button
-                        onClick={() => handleCopyPostCaption(post.caption, post._id)}
-                        className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#F4F2ED] hover:bg-[#E7E4DE] text-xs font-semibold text-[#171717] border border-[#E7E4DE] transition-colors cursor-pointer"
-                        title="Copy caption"
-                      >
-                        {copiedPostId === post._id ? (
-                          <>
-                            <Check className="w-3 h-3 text-emerald-600" />
-                            <span className="text-[11px]">Copied</span>
-                          </>
+                return (
+                  <GlassCard
+                    key={post._id}
+                    hover={false}
+                    className="bg-white border-[#E7E4DE] shadow-2xs p-5 flex flex-col justify-between"
+                  >
+                    <div>
+                      <div className="flex gap-4 items-start">
+                        {post.image ? (
+                          <img
+                            src={post.image}
+                            alt="Post thumbnail"
+                            className="w-20 h-20 rounded-xl object-cover border border-[#E7E4DE] bg-[#F4F2ED] flex-shrink-0"
+                            loading="lazy"
+                          />
                         ) : (
-                          <>
-                            <Copy className="w-3 h-3 text-[#66645F]" />
-                            <span className="text-[11px]">Copy</span>
-                          </>
+                          <div className="w-20 h-20 rounded-xl bg-[#F4F2ED] border border-[#E7E4DE] flex items-center justify-center flex-shrink-0">
+                            <ImageIcon className="w-6 h-6 text-[#8A8882]" />
+                          </div>
                         )}
-                      </button>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs text-[#171717] font-sans leading-relaxed line-clamp-4 whitespace-pre-wrap">
+                            {post.caption}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Publication Status & Management Actions */}
+                      {latestPub && (
+                        <div className="mt-4 p-2.5 rounded-xl bg-[#FBFAF7] border border-[#E7E4DE] space-y-2">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-1.5">
+                              <Linkedin className="w-3.5 h-3.5 text-[#0077B5]" />
+                              {latestPub.status === 'published' && (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                  Published
+                                </span>
+                              )}
+                              {latestPub.status === 'deleted' && (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-600 border border-slate-200">
+                                  Deleted
+                                </span>
+                              )}
+                              {latestPub.status === 'failed' && (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-rose-50 text-rose-700 border border-rose-200">
+                                  <AlertCircle className="w-3 h-3 text-rose-600" />
+                                  Failed
+                                </span>
+                              )}
+                              {latestPub.status === 'publishing' && (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                                  <RefreshCw className="w-3 h-3 animate-spin text-amber-600" />
+                                  Publishing
+                                </span>
+                              )}
+                            </div>
+
+                            {/* View on LinkedIn Link */}
+                            {latestPub.status === 'published' && latestPub.platformPostId && (
+                              <a
+                                href={getLinkedInPostUrl(latestPub.platformPostId)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#0077B5] hover:underline"
+                                title="View live post on LinkedIn"
+                              >
+                                <span>View</span>
+                                <ExternalLink className="w-3 h-3" />
+                              </a>
+                            )}
+                          </div>
+
+                          {/* Action Toolbar for Published Post */}
+                          {latestPub.status === 'published' && (
+                            <div className="flex items-center justify-between border-t border-[#E7E4DE] pt-2">
+                              <div className="flex items-center gap-1">
+                                <button
+                                  onClick={() => handleSyncPublication(post._id, latestPub._id)}
+                                  disabled={syncingPubId === latestPub._id}
+                                  className="inline-flex items-center gap-1 px-2 py-1 rounded bg-white hover:bg-[#F4F2ED] text-[11px] font-semibold text-[#171717] border border-[#E7E4DE] transition-colors cursor-pointer disabled:opacity-50"
+                                  title="Sync status with LinkedIn"
+                                >
+                                  <RefreshCw
+                                    className={`w-3 h-3 ${
+                                      syncingPubId === latestPub._id ? 'animate-spin' : ''
+                                    }`}
+                                  />
+                                  <span>Sync</span>
+                                </button>
+
+                                <button
+                                  onClick={() => handleOpenEditModal(post._id, latestPub, post.caption)}
+                                  className="inline-flex items-center gap-1 px-2 py-1 rounded bg-white hover:bg-[#F4F2ED] text-[11px] font-semibold text-[#171717] border border-[#E7E4DE] transition-colors cursor-pointer"
+                                  title="Edit post commentary"
+                                >
+                                  <Edit3 className="w-3 h-3 text-[#66645F]" />
+                                  <span>Edit</span>
+                                </button>
+                              </div>
+
+                              <button
+                                onClick={() =>
+                                  setConfirmDeleteModal({
+                                    postId: post._id,
+                                    publicationId: latestPub._id,
+                                  })
+                                }
+                                disabled={deletingPubId === latestPub._id}
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded bg-white hover:bg-rose-50 text-[11px] font-semibold text-rose-600 border border-[#E7E4DE] transition-colors cursor-pointer disabled:opacity-50"
+                                title="Delete post from LinkedIn"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                                <span>Delete</span>
+                              </button>
+                            </div>
+                          )}
+
+                          {/* Retry for Failed Post */}
+                          {latestPub.status === 'failed' && (
+                            <div className="flex items-center justify-end border-t border-[#E7E4DE] pt-2">
+                              <button
+                                onClick={() => handlePublishToLinkedIn(post._id)}
+                                disabled={publishingPostId === post._id}
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded bg-[#0077B5] hover:bg-[#006097] text-[11px] font-semibold text-white transition-colors cursor-pointer disabled:opacity-50"
+                              >
+                                <RotateCcw className="w-3 h-3" />
+                                <span>Retry Publish</span>
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
-                  </div>
-                </GlassCard>
-              ))}
+
+                    <div className="flex items-center justify-between border-t border-[#E7E4DE] pt-3 mt-4 text-[11px] text-[#66645F]">
+                      <span>
+                        {post.createdAt
+                          ? new Date(post.createdAt).toLocaleDateString(undefined, {
+                              month: 'short',
+                              day: 'numeric',
+                              year: 'numeric',
+                            })
+                          : 'Recent'}
+                      </span>
+
+                      <div className="flex items-center gap-2">
+                        {/* If not published or previously deleted, show Publish button */}
+                        {(!latestPub || latestPub.status === 'deleted') && (
+                          <button
+                            onClick={() => handlePublishToLinkedIn(post._id)}
+                            disabled={publishingPostId === post._id}
+                            className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#0077B5] hover:bg-[#006097] text-white text-xs font-semibold shadow-2xs transition-all cursor-pointer disabled:opacity-50"
+                            title="Publish to LinkedIn"
+                          >
+                            <Linkedin className="w-3 h-3 fill-current" />
+                            <span>
+                              {publishingPostId === post._id ? 'Publishing...' : 'Publish'}
+                            </span>
+                          </button>
+                        )}
+
+                        <button
+                          onClick={() => handleCopyPostCaption(post.caption, post._id)}
+                          className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#F4F2ED] hover:bg-[#E7E4DE] text-xs font-semibold text-[#171717] border border-[#E7E4DE] transition-colors cursor-pointer"
+                          title="Copy caption"
+                        >
+                          {copiedPostId === post._id ? (
+                            <>
+                              <Check className="w-3 h-3 text-emerald-600" />
+                              <span className="text-[11px]">Copied</span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="w-3 h-3 text-[#66645F]" />
+                              <span className="text-[11px]">Copy</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  </GlassCard>
+                );
+              })}
             </div>
           )}
         </div>
