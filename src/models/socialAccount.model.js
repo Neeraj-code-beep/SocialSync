@@ -47,7 +47,9 @@ const socialAccountSchema = new mongoose.Schema(
     },
     accessToken: {
       type: encryptedTokenSchema,
-      required: true,
+      required: function () {
+        return this.connectionStatus === 'connected';
+      },
       select: false, // Never returned in normal queries
     },
     refreshToken: {

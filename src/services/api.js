@@ -159,6 +159,15 @@ export const socialService = {
     const response = await api.get('/social/linkedin/connect');
     return response.data;
   },
+  reauthorizeLinkedIn: async () => {
+    const response = await api.post('/social/linkedin/reauthorize');
+    return response.data;
+  },
+  disconnectLinkedIn: async (accountId) => {
+    const url = accountId ? `/social/linkedin/${accountId}` : '/social/linkedin';
+    const response = await api.delete(url);
+    return response.data;
+  },
   publishToLinkedIn: async (postId, socialAccountId) => {
     return postService.publishToLinkedIn(postId, socialAccountId);
   },

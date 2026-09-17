@@ -1009,6 +1009,8 @@ const linkedinProvider = {
       supportedImageFormats: SUPPORTED_IMAGE_MIMES,
       maxImageSizeBytes: 10 * 1024 * 1024, // 10MB
       canSchedule: false,
+      canRefresh: false,
+      canRevoke: false,
       hasProgrammaticRefreshToken: false,
       tokenLifespanDays: 60,
     };

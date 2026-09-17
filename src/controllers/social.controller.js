@@ -164,8 +164,95 @@ async function getConnectedAccounts(req, res, next) {
   }
 }
 
+/**
+ * Initiates LinkedIn OAuth 2.0 reauthorization with required scopes
+ * POST /api/social/linkedin/reauthorize
+ */
+async function reauthorizeLinkedIn(req, res, next) {
+  try {
+    const userId = req.user._id;
+
+    // 1. Generate cryptographically random, unpredictable 32-byte state token
+    const stateToken = crypto.randomBytes(32).toString('hex');
+
+    // 2. Persist OAuth state bound to authenticated user with TTL expiry
+    await OAuthState.create({
+      state: stateToken,
+      user: userId,
+      platform: 'linkedin',
+    });
+
+    // 3. Construct official LinkedIn OAuth authorization URL with latest required scopes
+    const authorizationUrl = linkedinProvider.getAuthorizationUrl({
+      state: stateToken,
+    });
+
+    if (req.query.redirect === 'true') {
+      return res.redirect(authorizationUrl);
+    }
+
+    return res.status(200).json({
+      success: true,
+      authorizationUrl,
+      state: stateToken,
+      reauthorization: true,
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+/**
+ * Disconnects a user's LinkedIn social account safely
+ * DELETE /api/social/linkedin or DELETE /api/social/linkedin/:id
+ */
+async function disconnectLinkedIn(req, res, next) {
+  try {
+    const userId = req.user._id;
+    const accountId = req.params.id;
+
+    const query = { user: userId, platform: 'linkedin' };
+    if (accountId) {
+      query._id = accountId;
+    }
+
+    const account = await SocialAccount.findOne(query);
+
+    if (!account) {
+      return res.status(404).json({
+        success: false,
+        message: 'Connected LinkedIn account not found for authenticated user.',
+      });
+    }
+
+    // Securely clear stored token credentials and mark connection revoked
+    account.connectionStatus = 'revoked';
+    account.accessToken = undefined;
+    account.refreshToken = undefined;
+    account.expiresAt = undefined;
+    account.refreshTokenExpiresAt = undefined;
+    await account.save();
+
+    return res.status(200).json({
+      success: true,
+      message:
+        'LinkedIn account disconnected successfully. Published posts and analytics history remain preserved.',
+      account: {
+        _id: account._id,
+        platform: account.platform,
+        displayName: account.displayName,
+        connectionStatus: 'revoked',
+      },
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 module.exports = {
   connectLinkedIn,
+  reauthorizeLinkedIn,
   linkedinCallback,
   getConnectedAccounts,
+  disconnectLinkedIn,
 };

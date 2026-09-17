@@ -330,6 +330,64 @@ async function fetchAndValidatePostImage(imageUrl) {
   });
 }
 
+/**
+ * Validates social account connectivity, local token expiration, and credential existence
+ * @param {Object} socialAccount
+ * @returns {Promise<{ valid: boolean, status?: number, message?: string, errorCode?: string }>}
+ */
+async function validateAccountConnection(socialAccount) {
+  if (!socialAccount) {
+    return {
+      valid: false,
+      status: 404,
+      message: 'Social account not found or unauthorized.',
+      errorCode: 'ACCOUNT_NOT_FOUND',
+    };
+  }
+
+  if (socialAccount.platform !== 'linkedin') {
+    return {
+      valid: false,
+      status: 400,
+      message: 'Target social account is not a LinkedIn account.',
+      errorCode: 'INVALID_PLATFORM',
+    };
+  }
+
+  if (socialAccount.connectionStatus !== 'connected') {
+    return {
+      valid: false,
+      status: 401,
+      message: 'LinkedIn account connection is inactive or expired. Please reconnect.',
+      errorCode: 'LINKEDIN_REAUTH_REQUIRED',
+    };
+  }
+
+  // Check local token expiration
+  if (socialAccount.expiresAt && new Date(socialAccount.expiresAt).getTime() <= Date.now()) {
+    socialAccount.connectionStatus = 'expired';
+    await socialAccount.save();
+
+    return {
+      valid: false,
+      status: 401,
+      message: 'LinkedIn access token has expired. Please reconnect your account.',
+      errorCode: 'LINKEDIN_REAUTH_REQUIRED',
+    };
+  }
+
+  if (!socialAccount.accessToken) {
+    return {
+      valid: false,
+      status: 401,
+      message: 'LinkedIn credentials are missing or revoked. Please reconnect your account.',
+      errorCode: 'LINKEDIN_REAUTH_REQUIRED',
+    };
+  }
+
+  return { valid: true };
+}
+
 const createPostController = async (req, res, next) => {
   try {
     const file = req.file;
@@ -464,17 +522,12 @@ const publishPostToLinkedInController = async (req, res, next) => {
     }
 
     // 4. Validate platform and connection status
-    if (socialAccount.platform !== 'linkedin') {
-      return res.status(400).json({
+    const validation = await validateAccountConnection(socialAccount);
+    if (!validation.valid) {
+      return res.status(validation.status || 400).json({
         success: false,
-        message: 'Target social account is not a LinkedIn account.',
-      });
-    }
-
-    if (socialAccount.connectionStatus !== 'connected') {
-      return res.status(400).json({
-        success: false,
-        message: 'LinkedIn account connection is inactive or expired. Please reconnect.',
+        message: validation.message,
+        errorCode: validation.errorCode,
       });
     }
 
@@ -583,6 +636,29 @@ const publishPostToLinkedInController = async (req, res, next) => {
     } catch (providerError) {
       // Discard plaintext token immediately
       decryptedToken = null;
+
+      // Provider 401 handling: mark connection status expired and return normalized reconnect error
+      if (providerError.status === 401 || providerError.code === 'UNAUTHORIZED') {
+        await SocialAccount.updateOne({ _id: socialAccount._id }, { connectionStatus: 'expired' });
+        const errCode = 'LINKEDIN_REAUTH_REQUIRED';
+        const errMsg = 'LinkedIn authorization expired or invalid. Please reconnect your account.';
+        publication.status = 'failed';
+        publication.errorCode = errCode;
+        publication.errorMessage = errMsg;
+        await publication.save();
+
+        return res.status(401).json({
+          success: false,
+          message: errMsg,
+          errorCode: errCode,
+          publication: {
+            _id: publication._id,
+            status: 'failed',
+            errorCode: errCode,
+            errorMessage: errMsg,
+          },
+        });
+      }
 
       // 11. Record failure in publication record safely
       publication.status = 'failed';
@@ -760,10 +836,12 @@ const syncPublicationController = async (req, res, next) => {
       });
     }
 
-    if (publication.platform !== 'linkedin') {
-      return res.status(400).json({
+    const validation = await validateAccountConnection(socialAccount);
+    if (!validation.valid) {
+      return res.status(validation.status || 400).json({
         success: false,
-        message: 'Only LinkedIn publications can be synchronized with this endpoint.',
+        message: validation.message,
+        errorCode: validation.errorCode,
       });
     }
 
@@ -819,6 +897,16 @@ const syncPublicationController = async (req, res, next) => {
       });
     } catch (providerError) {
       decryptedToken = null;
+
+      // Provider 401 handling: mark connection status expired and return normalized reconnect error
+      if (providerError.status === 401 || providerError.code === 'UNAUTHORIZED') {
+        await SocialAccount.updateOne({ _id: socialAccount._id }, { connectionStatus: 'expired' });
+        return res.status(401).json({
+          success: false,
+          message: 'LinkedIn authorization expired or invalid. Please reconnect your account.',
+          errorCode: 'LINKEDIN_REAUTH_REQUIRED',
+        });
+      }
 
       // If LinkedIn returns 404, the post was deleted on LinkedIn
       if (providerError.status === 404) {
@@ -914,17 +1002,12 @@ const updatePublicationCommentaryController = async (req, res, next) => {
       user: userId,
     }).select('+accessToken');
 
-    if (!socialAccount) {
-      return res.status(404).json({
+    const validation = await validateAccountConnection(socialAccount);
+    if (!validation.valid) {
+      return res.status(validation.status || 400).json({
         success: false,
-        message: 'Social account not found or unauthorized.',
-      });
-    }
-
-    if (publication.platform !== 'linkedin') {
-      return res.status(400).json({
-        success: false,
-        message: 'Only LinkedIn publications can be updated with this endpoint.',
+        message: validation.message,
+        errorCode: validation.errorCode,
       });
     }
 
@@ -980,6 +1063,16 @@ const updatePublicationCommentaryController = async (req, res, next) => {
       });
     } catch (providerError) {
       decryptedToken = null;
+
+      // Provider 401 handling: mark connection status expired and return normalized reconnect error
+      if (providerError.status === 401 || providerError.code === 'UNAUTHORIZED') {
+        await SocialAccount.updateOne({ _id: socialAccount._id }, { connectionStatus: 'expired' });
+        return res.status(401).json({
+          success: false,
+          message: 'LinkedIn authorization expired or invalid. Please reconnect your account.',
+          errorCode: 'LINKEDIN_REAUTH_REQUIRED',
+        });
+      }
 
       const statusCode =
         providerError.status && providerError.status >= 400 && providerError.status < 600
@@ -1041,17 +1134,12 @@ const deletePublicationController = async (req, res, next) => {
       user: userId,
     }).select('+accessToken');
 
-    if (!socialAccount) {
-      return res.status(404).json({
+    const validation = await validateAccountConnection(socialAccount);
+    if (!validation.valid) {
+      return res.status(validation.status || 400).json({
         success: false,
-        message: 'Social account not found or unauthorized.',
-      });
-    }
-
-    if (publication.platform !== 'linkedin') {
-      return res.status(400).json({
-        success: false,
-        message: 'Only LinkedIn publications can be deleted with this endpoint.',
+        message: validation.message,
+        errorCode: validation.errorCode,
       });
     }
 
@@ -1106,6 +1194,16 @@ const deletePublicationController = async (req, res, next) => {
       });
     } catch (providerError) {
       decryptedToken = null;
+
+      // Provider 401 handling: mark connection status expired and return normalized reconnect error
+      if (providerError.status === 401 || providerError.code === 'UNAUTHORIZED') {
+        await SocialAccount.updateOne({ _id: socialAccount._id }, { connectionStatus: 'expired' });
+        return res.status(401).json({
+          success: false,
+          message: 'LinkedIn authorization expired or invalid. Please reconnect your account.',
+          errorCode: 'LINKEDIN_REAUTH_REQUIRED',
+        });
+      }
 
       const statusCode =
         providerError.status && providerError.status >= 400 && providerError.status < 600
@@ -1168,17 +1266,25 @@ const getPublicationAnalyticsController = async (req, res, next) => {
       user: userId,
     }).select('+accessToken');
 
-    if (!socialAccount) {
-      return res.status(404).json({
+    const validation = await validateAccountConnection(socialAccount);
+    if (!validation.valid) {
+      return res.status(validation.status || 400).json({
         success: false,
-        message: 'Social account not found or unauthorized.',
+        message: validation.message,
+        errorCode: validation.errorCode,
       });
     }
 
-    if (publication.platform !== 'linkedin') {
-      return res.status(400).json({
+    if (
+      socialAccount.scopes &&
+      socialAccount.scopes.length > 0 &&
+      !socialAccount.scopes.includes('r_member_postAnalytics')
+    ) {
+      return res.status(403).json({
         success: false,
-        message: 'Analytics are currently only supported for LinkedIn publications.',
+        message:
+          'LinkedIn member post analytics permission (r_member_postAnalytics) missing or access denied. Please reconnect your LinkedIn account.',
+        errorCode: 'ANALYTICS_FORBIDDEN',
       });
     }
 
@@ -1259,6 +1365,20 @@ const getPublicationAnalyticsController = async (req, res, next) => {
       });
     } catch (providerError) {
       decryptedToken = null;
+
+      // Provider 401 / unauthorized handling: mark connection status expired and return normalized reconnect error
+      if (
+        providerError.status === 401 ||
+        providerError.code === 'ANALYTICS_UNAUTHORIZED' ||
+        providerError.code === 'UNAUTHORIZED'
+      ) {
+        await SocialAccount.updateOne({ _id: socialAccount._id }, { connectionStatus: 'expired' });
+        return res.status(401).json({
+          success: false,
+          message: 'LinkedIn authorization expired or invalid. Please reconnect your account.',
+          errorCode: 'LINKEDIN_REAUTH_REQUIRED',
+        });
+      }
 
       const statusCode =
         providerError.status && providerError.status >= 400 && providerError.status < 500

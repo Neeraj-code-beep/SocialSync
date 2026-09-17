@@ -59,6 +59,8 @@ const Dashboard = () => {
   const [editingModal, setEditingModal] = useState(null); // { postId, publicationId, commentary, isSaving }
   // Delete Confirmation Modal State
   const [confirmDeleteModal, setConfirmDeleteModal] = useState(null); // { postId, publicationId, postTitle }
+  // Disconnect Account Modal State
+  const [confirmDisconnectModal, setConfirmDisconnectModal] = useState(null); // { accountId, accountName, isDisconnecting }
   // Analytics Modal State
   const [analyticsModal, setAnalyticsModal] = useState(null); // { postId, publicationId, platformPostId, isLoading, error, errorCode, metrics, capturedAt, aggregation }
 
@@ -176,6 +178,54 @@ const Dashboard = () => {
       const msg = err.response?.data?.message || 'Failed to start LinkedIn connection.';
       toast.error(msg);
       setIsConnectingLinkedIn(false);
+    }
+  };
+
+  const handleReconnectLinkedIn = async () => {
+    setIsConnectingLinkedIn(true);
+    try {
+      const res = await socialService.reauthorizeLinkedIn();
+      if (res.success && res.authorizationUrl) {
+        window.location.href = res.authorizationUrl;
+      } else {
+        const fallbackRes = await socialService.getLinkedInConnectUrl();
+        if (fallbackRes.success && fallbackRes.authorizationUrl) {
+          window.location.href = fallbackRes.authorizationUrl;
+        } else {
+          toast.error('Could not initiate LinkedIn reauthorization.');
+          setIsConnectingLinkedIn(false);
+        }
+      }
+    } catch (err) {
+      console.error('LinkedIn reauthorize error:', err);
+      const msg = err.response?.data?.message || 'Failed to start LinkedIn reauthorization.';
+      toast.error(msg);
+      setIsConnectingLinkedIn(false);
+    }
+  };
+
+  const handleConfirmDisconnect = async () => {
+    if (!confirmDisconnectModal) return;
+    setConfirmDisconnectModal((prev) => ({ ...prev, isDisconnecting: true }));
+    try {
+      const res = await socialService.disconnectLinkedIn(confirmDisconnectModal.accountId);
+      if (res.success) {
+        toast.success(
+          'LinkedIn account disconnected. Published posts and analytics history remain preserved.'
+        );
+        // Update local state without full page reload
+        setSocialAccounts((prev) =>
+          prev.map((acc) =>
+            acc.platform === 'linkedin' ? { ...acc, connectionStatus: 'revoked' } : acc
+          )
+        );
+      }
+    } catch (err) {
+      console.error('LinkedIn disconnect error:', err);
+      const msg = err.response?.data?.message || 'Failed to disconnect LinkedIn account.';
+      toast.error(msg);
+    } finally {
+      setConfirmDisconnectModal(null);
     }
   };
 
@@ -586,6 +636,58 @@ const Dashboard = () => {
         )}
       </AnimatePresence>
 
+      {/* Disconnect LinkedIn Confirmation Modal */}
+      <AnimatePresence>
+        {confirmDisconnectModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-2xl p-6 max-w-md w-full shadow-xl border border-[#E7E4DE] space-y-4"
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-rose-50 border border-rose-100 flex items-center justify-center text-rose-600 flex-shrink-0">
+                  <AlertCircle className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-semibold text-[#171717]">Disconnect LinkedIn?</h3>
+                  <p className="text-xs text-[#66645F] mt-0.5">
+                    {confirmDisconnectModal.accountName || 'LinkedIn Account'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-[#FBFAF7] border border-[#E7E4DE] text-xs text-[#66645F] space-y-1.5 leading-relaxed">
+                <p className="font-medium text-[#171717]">
+                  Your published posts and analytics history will remain in Social Sync.
+                </p>
+                <p className="text-[11px] text-[#66645F]">
+                  Local credentials will be removed. You can reconnect your account at any time.
+                </p>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-[#E7E4DE]">
+                <button
+                  onClick={() => setConfirmDisconnectModal(null)}
+                  disabled={confirmDisconnectModal.isDisconnecting}
+                  className="px-3.5 py-1.5 rounded-xl border border-[#E7E4DE] text-xs font-semibold hover:bg-[#F4F2ED] transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleConfirmDisconnect}
+                  disabled={confirmDisconnectModal.isDisconnecting}
+                  className="px-4 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold transition-colors cursor-pointer disabled:opacity-50 shadow-2xs"
+                >
+                  {confirmDisconnectModal.isDisconnecting ? 'Disconnecting...' : 'Disconnect'}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       {/* Analytics Modal */}
       <AnimatePresence>
         {analyticsModal && (
@@ -812,7 +914,19 @@ const Dashboard = () => {
               <div className="h-10 w-44 bg-white border border-[#E7E4DE] rounded-xl animate-pulse" />
             ) : (() => {
               const linkedinAccount = socialAccounts.find((a) => a.platform === 'linkedin');
-              if (linkedinAccount) {
+              const isConnected =
+                linkedinAccount && linkedinAccount.connectionStatus === 'connected';
+              const isMissingAnalytics =
+                isConnected &&
+                linkedinAccount.scopes &&
+                linkedinAccount.scopes.length > 0 &&
+                !linkedinAccount.scopes.includes('r_member_postAnalytics');
+              const isAttentionRequired =
+                linkedinAccount &&
+                (linkedinAccount.connectionStatus === 'expired' ||
+                  linkedinAccount.connectionStatus === 'error');
+
+              if (isConnected && !isMissingAnalytics) {
                 return (
                   <div className="flex items-center gap-3 px-3.5 py-2 rounded-xl bg-white border border-[#E7E4DE] shadow-2xs">
                     {linkedinAccount.profileImageUrl ? (
@@ -837,9 +951,100 @@ const Dashboard = () => {
                       </div>
                       <span className="text-[10px] text-[#66645F]">LinkedIn Profile</span>
                     </div>
+
+                    <div className="flex items-center gap-1 border-l border-[#E7E4DE] pl-2 ml-1">
+                      <button
+                        onClick={handleReconnectLinkedIn}
+                        disabled={isConnectingLinkedIn}
+                        title="Reconnect / Reauthorize with LinkedIn"
+                        className="px-2 py-1 rounded-lg hover:bg-[#F4F2ED] text-[#66645F] hover:text-[#171717] text-[11px] font-medium transition-colors cursor-pointer disabled:opacity-50"
+                      >
+                        Reconnect
+                      </button>
+                      <button
+                        onClick={() =>
+                          setConfirmDisconnectModal({
+                            accountId: linkedinAccount._id,
+                            accountName: linkedinAccount.displayName,
+                          })
+                        }
+                        title="Disconnect LinkedIn account"
+                        className="px-2 py-1 rounded-lg hover:bg-rose-50 text-rose-600 text-[11px] font-medium transition-colors cursor-pointer"
+                      >
+                        Disconnect
+                      </button>
+                    </div>
                   </div>
                 );
               }
+
+              if (isConnected && isMissingAnalytics) {
+                return (
+                  <div className="flex items-center gap-3 px-3.5 py-2 rounded-xl bg-amber-50/80 border border-amber-200 shadow-2xs">
+                    <div className="text-left">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs font-semibold text-amber-900">
+                          {linkedinAccount.displayName}
+                        </span>
+                        <span className="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-semibold bg-amber-100 text-amber-800 border border-amber-300">
+                          Analytics permission required
+                        </span>
+                      </div>
+                      <span className="text-[10px] text-amber-700">Reconnect to view post analytics</span>
+                    </div>
+
+                    <div className="flex items-center gap-1 border-l border-amber-200 pl-2 ml-1">
+                      <button
+                        onClick={handleReconnectLinkedIn}
+                        disabled={isConnectingLinkedIn}
+                        className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#0077B5] hover:bg-[#006097] text-white text-xs font-semibold shadow-2xs transition-colors cursor-pointer disabled:opacity-50"
+                      >
+                        <Linkedin className="w-3 h-3 fill-current" />
+                        <span>Reconnect</span>
+                      </button>
+                      <button
+                        onClick={() =>
+                          setConfirmDisconnectModal({
+                            accountId: linkedinAccount._id,
+                            accountName: linkedinAccount.displayName,
+                          })
+                        }
+                        className="px-2 py-1 rounded-lg hover:bg-rose-100/50 text-rose-600 text-[11px] font-medium transition-colors cursor-pointer"
+                      >
+                        Disconnect
+                      </button>
+                    </div>
+                  </div>
+                );
+              }
+
+              if (isAttentionRequired) {
+                return (
+                  <div className="flex items-center gap-3 px-3.5 py-2 rounded-xl bg-rose-50 border border-rose-200 shadow-2xs">
+                    <div className="text-left">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs font-semibold text-rose-900">
+                          {linkedinAccount.displayName || 'LinkedIn'}
+                        </span>
+                        <span className="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-semibold bg-rose-100 text-rose-800 border border-rose-300">
+                          Connection needs attention
+                        </span>
+                      </div>
+                      <span className="text-[10px] text-rose-700">Authorization expired or invalid</span>
+                    </div>
+
+                    <button
+                      onClick={handleReconnectLinkedIn}
+                      disabled={isConnectingLinkedIn}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#0077B5] hover:bg-[#006097] text-white text-xs font-semibold shadow-2xs transition-colors cursor-pointer disabled:opacity-50"
+                    >
+                      <Linkedin className="w-3.5 h-3.5 fill-current" />
+                      <span>Reconnect LinkedIn</span>
+                    </button>
+                  </div>
+                );
+              }
+
               return (
                 <button
                   onClick={handleConnectLinkedIn}

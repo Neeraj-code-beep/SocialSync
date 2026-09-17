@@ -186,7 +186,7 @@ describe('Phase 1.3A: LinkedIn OAuth & Social Account Connection', () => {
       const account = await SocialAccount.findOne({
         user: user._id,
         platform: 'linkedin',
-      });
+      }).select('+accessToken');
 
       assert.ok(account, 'SocialAccount must be created in DB');
       assert.strictEqual(account.displayName, 'Alex Morgan');

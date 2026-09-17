@@ -271,6 +271,14 @@ function setupInMemoryDb() {
       user: doc.user?.toString() || doc.user,
       createdAt: now,
       updatedAt: now,
+      save: function () {
+        this.updatedAt = new Date();
+        const idx = socialAccountsCollection.findIndex((a) => a._id.toString() === _id.toString());
+        if (idx !== -1) {
+          socialAccountsCollection[idx] = { ...this };
+        }
+        return Promise.resolve(this);
+      },
     };
     socialAccountsCollection.push(newAccount);
     return Promise.resolve(newAccount);
@@ -292,6 +300,14 @@ function setupInMemoryDb() {
         ...existing,
         ...update,
         updatedAt: now,
+        save: function () {
+          this.updatedAt = new Date();
+          const idx = socialAccountsCollection.findIndex((a) => a._id.toString() === existing._id.toString());
+          if (idx !== -1) {
+            socialAccountsCollection[idx] = { ...this };
+          }
+          return Promise.resolve(this);
+        },
       };
       socialAccountsCollection[matchIndex] = updated;
       return Promise.resolve(clone(updated));
@@ -309,6 +325,14 @@ function setupInMemoryDb() {
         ...update,
         createdAt: now,
         updatedAt: now,
+        save: function () {
+          this.updatedAt = new Date();
+          const idx = socialAccountsCollection.findIndex((a) => a._id.toString() === _id.toString());
+          if (idx !== -1) {
+            socialAccountsCollection[idx] = { ...this };
+          }
+          return Promise.resolve(this);
+        },
       };
       socialAccountsCollection.push(newAccount);
       return Promise.resolve(clone(newAccount));
@@ -325,23 +349,126 @@ function setupInMemoryDb() {
       if (filter.platformUserId && a.platformUserId !== filter.platformUserId) return false;
       return true;
     });
-    let result = match ? clone(match) : null;
+
+    let includeToken = false;
+    const buildResult = () => {
+      if (!match) return null;
+      const copy = clone(match);
+      if (!includeToken) {
+        delete copy.accessToken;
+        delete copy.refreshToken;
+      }
+      return {
+        ...copy,
+        save: function () {
+          this.updatedAt = new Date();
+          const idx = socialAccountsCollection.findIndex((a) => a._id.toString() === match._id.toString());
+          if (idx !== -1) {
+            socialAccountsCollection[idx] = { ...socialAccountsCollection[idx], ...this };
+          }
+          return Promise.resolve(this);
+        },
+      };
+    };
 
     const chain = {
-      select: function () {
+      select: function (proj) {
+        if (proj && proj.includes('+accessToken')) {
+          includeToken = true;
+        }
         return chain;
       },
       lean: function () {
         return chain;
       },
       then: function (resolve, reject) {
-        return Promise.resolve(result).then(resolve, reject);
+        return Promise.resolve(buildResult()).then(resolve, reject);
       },
       catch: function (reject) {
-        return Promise.resolve(result).catch(reject);
+        return Promise.resolve(buildResult()).catch(reject);
       },
     };
     return chain;
+  };
+
+  SocialAccount.findById = function (id) {
+    const stringId = id?.toString();
+    const match = socialAccountsCollection.find((a) => a._id.toString() === stringId);
+
+    let includeToken = false;
+    const buildResult = () => {
+      if (!match) return null;
+      const copy = clone(match);
+      if (!includeToken) {
+        delete copy.accessToken;
+        delete copy.refreshToken;
+      }
+      return {
+        ...copy,
+        save: function () {
+          this.updatedAt = new Date();
+          const idx = socialAccountsCollection.findIndex((a) => a._id.toString() === match._id.toString());
+          if (idx !== -1) {
+            socialAccountsCollection[idx] = { ...socialAccountsCollection[idx], ...this };
+          }
+          return Promise.resolve(this);
+        },
+      };
+    };
+
+    const chain = {
+      select: function (proj) {
+        if (proj && proj.includes('+accessToken')) {
+          includeToken = true;
+        }
+        return chain;
+      },
+      lean: function () {
+        return chain;
+      },
+      then: function (resolve, reject) {
+        return Promise.resolve(buildResult()).then(resolve, reject);
+      },
+      catch: function (reject) {
+        return Promise.resolve(buildResult()).catch(reject);
+      },
+    };
+    return chain;
+  };
+
+  SocialAccount.updateOne = function (filter = {}, update = {}) {
+    const matchIndex = socialAccountsCollection.findIndex((a) => {
+      if (filter._id && a._id.toString() !== filter._id.toString()) return false;
+      if (filter.user && a.user?.toString() !== filter.user?.toString()) return false;
+      return true;
+    });
+
+    if (matchIndex !== -1) {
+      socialAccountsCollection[matchIndex] = {
+        ...socialAccountsCollection[matchIndex],
+        ...update,
+        ...(update.$set || {}),
+        updatedAt: new Date(),
+      };
+      return Promise.resolve({ acknowledged: true, modifiedCount: 1, matchedCount: 1 });
+    }
+
+    return Promise.resolve({ acknowledged: true, modifiedCount: 0, matchedCount: 0 });
+  };
+
+  SocialAccount.countDocuments = function (filter = {}) {
+    let results = socialAccountsCollection;
+    if (filter.user) {
+      const targetUser = filter.user?.toString();
+      results = results.filter((a) => a.user?.toString() === targetUser);
+    }
+    if (filter.platform) {
+      results = results.filter((a) => a.platform === filter.platform);
+    }
+    if (filter.platformUserId) {
+      results = results.filter((a) => a.platformUserId === filter.platformUserId);
+    }
+    return Promise.resolve(results.length);
   };
 
   SocialAccount.find = function (filter = {}) {
@@ -354,18 +481,30 @@ function setupInMemoryDb() {
       results = results.filter((a) => a.platform === filter.platform);
     }
 
+    let includeToken = false;
     const queryChain = {
       sort: function () {
         return queryChain;
       },
-      select: function () {
+      select: function (proj) {
+        if (proj && proj.includes('+accessToken')) {
+          includeToken = true;
+        }
         return queryChain;
       },
       lean: function () {
         return queryChain;
       },
       then: function (resolve, reject) {
-        return Promise.resolve(results.map(clone)).then(resolve, reject);
+        const mapped = results.map((item) => {
+          const c = clone(item);
+          if (!includeToken) {
+            delete c.accessToken;
+            delete c.refreshToken;
+          }
+          return c;
+        });
+        return Promise.resolve(mapped).then(resolve, reject);
       },
       catch: function (reject) {
         return Promise.resolve([]).catch(reject);
@@ -661,6 +800,14 @@ function seedSocialAccount(userId, custom = {}) {
     connectionStatus: custom.connectionStatus || 'connected',
     createdAt: custom.createdAt || new Date(),
     updatedAt: custom.updatedAt || new Date(),
+    save: function () {
+      this.updatedAt = new Date();
+      const idx = socialAccountsCollection.findIndex((a) => a._id.toString() === _id.toString());
+      if (idx !== -1) {
+        socialAccountsCollection[idx] = { ...this };
+      }
+      return Promise.resolve(this);
+    },
   };
   socialAccountsCollection.push(account);
   return account;
